@@ -131,9 +131,23 @@ def train_one_segment(train_df, eval_df, save_path_prefix):
 
 # --- Walk-Forward Training (Updated with dynamic paths) ---
 def run_walk_forward_training():
+    """
+    Main function to run the entire walk-forward training process.
+    It now loads data from the preprocessed Parquet file.
+    """
     print("Starting Walk-Forward Training Process...")
-    transformer = DataTransformer()
-    full_df = transformer.load_and_preprocess_data(file_path=str(paths.TRAIN_DATA_FILE))
+    
+    # --- **CRITICAL CHANGE**: Load from the efficient Parquet file ---
+    processed_data_path = paths.DATA_DIR / "processed_training_data.parquet"
+    if not os.path.exists(processed_data_path):
+        raise FileNotFoundError(
+            f"Preprocessed data file not found at {processed_data_path}. "
+            "Please run 'scripts/preprocess_data.py' first!"
+        )
+    
+    print(f"Loading preprocessed data from: {processed_data_path}")
+    # Reading from Parquet is much faster and uses less RAM
+    full_df = pd.read_parquet(processed_data_path)
     
     wf_config = config.get('training.walk_forward', {})
     n_splits = wf_config.get('n_splits', 5)
