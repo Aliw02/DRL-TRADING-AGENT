@@ -6,13 +6,15 @@ import argparse
 
 # --- Add project root to the Python path ---
 # This allows us to import modules from other directories like 'scripts' and 'utils'
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(PROJECT_ROOT)
+print(f"Project Root added to sys.path: {PROJECT_ROOT}")
 # --- Import the core functions from our scripts ---
 from scripts.train_agent import run_walk_forward_training, run_finetuning_for_live_trading
 from scripts.analyze_features import analyze_model_features
 from scripts.backtest_agent import run_backtest
 from utils.logger import setup_logging, get_logger
+
 
 def main(skip_training=False):
     """

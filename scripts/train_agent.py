@@ -198,15 +198,24 @@ def run_finetuning_for_live_trading():
 
     transformer = DataTransformer()
     full_df = transformer.load_and_preprocess_data(file_path=str(paths.TRAIN_DATA_FILE))
-    
-    logger.info("Scaling the entire dataset for final fine-tuning...")
+
+    # --- **CRITICAL CHANGE**: Use only the last 2-3 years for fine-tuning ---
+    # Assuming M1 data has ~525,600 rows per year. Let's take ~2.5 years.
+    recent_data_rows = 525600 * 3.0
+    recent_df = full_df.tail(int(recent_data_rows)).copy()
+
+    print(f"Using the last {len(recent_df)} records (approx. 3 years) for fine-tuning.")
+
+    # Scale only the recent data
     scaler = RobustScaler()
-    feature_cols = [col for col in full_df.columns if 'close' not in col and 'time' not in col]
+    feature_cols = [col for col in recent_df.columns if 'close' not in col and 'time' not in col]
     
-    scaled_features = scaler.fit_transform(full_df[feature_cols])
-    final_train_df = pd.DataFrame(scaled_features, columns=feature_cols, index=full_df.index)
-    final_train_df['close'] = full_df['close'].values
-    print(f"Prepared full dataset with {len(final_train_df)} samples for fine-tuning.")
+    scaled_features = scaler.fit_transform(recent_df[feature_cols])
+    final_train_df = pd.DataFrame(scaled_features, columns=feature_cols, index=recent_df.index)
+    final_train_df['close'] = recent_df['close'].values
+    
+    print(f"Prepared recent dataset with {len(final_train_df)} samples for fine-tuning.")
+
 
     final_env = TradingEnv(final_train_df)
     final_env = Monitor(final_env)
