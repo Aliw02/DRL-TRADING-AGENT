@@ -46,12 +46,14 @@ data:
     - market_regime
 
 # Model parameters
+# model parameters
 model:
   features_dim: 256
-  ce_stream_hidden: 64
-  context_stream_hidden: 128
-  position_stream_hidden: 16
-
+  cnn_out_channels: 64
+  transformer_n_heads: 4
+  transformer_n_layers: 2
+  
+    
 # Logging parameters
 logging:
   level: "INFO"

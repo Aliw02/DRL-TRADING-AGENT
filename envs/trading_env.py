@@ -1,164 +1,82 @@
-import gymnasium as gym
-from gymnasium import spaces
-import numpy as np
-import pandas as pd
+# models/custom_policy.py (ADVANCED & PRACTICAL VERSION)
+
+import torch
+import torch.nn as nn
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from utils.logger import get_logger
 from config.init import config
 
 logger = get_logger(__name__)
 
-class TradingEnv(gym.Env):
-    metadata = {'render.modes': ['human']}
+class CustomActorCriticPolicy(BaseFeaturesExtractor):
+    """
+    A hybrid CNN-Transformer feature extractor for robust time-series analysis.
+    - The CNN layer captures local, short-term patterns (like price action).
+    - The Transformer layer analyzes the global context and relationships between these patterns.
+    """
     
-    def __init__(self, df, initial_balance=None, sequence_length=None):
-        super(TradingEnv, self).__init__()
+    def __init__(self, observation_space, features_dim=None):
+        features_dim = features_dim or config.get('model.features_dim', 256)
+        super(CustomActorCriticPolicy, self).__init__(observation_space, features_dim)
         
-        self.initial_balance = initial_balance or config.get('environment.initial_balance', 10000)
-        self.sequence_length = sequence_length or config.get('environment.sequence_length', 40)
-        
-        # استعادة تكاليف التداول
-        self.commission_pct = config.get('environment.commission_pct', 0.0005)
-        self.slippage_pct = config.get('environment.slippage_pct', 0.0002)
+        self.feature_dim = observation_space.shape[1]
 
-        # إضافة وزن المكافأة القائمة على المؤشر من ملف الإعدادات
-        self.indicator_reward_weight = config.get('environment.indicator_reward_weight', 0.1)
-
-        self.df = df.reset_index(drop=True)
-        self.current_step = self.sequence_length
-        self.max_steps = len(self.df) - 1
+        # --- HYBRID ARCHITECTURE CONFIGURATION ---
+        cnn_out_channels = config.get('model.cnn_out_channels', 64)
+        transformer_n_heads = config.get('model.transformer_n_heads', 4)
+        transformer_n_layers = config.get('model.transformer_n_layers', 2)
         
-        self.action_space = spaces.Discrete(3)  # 0: Hold, 1: Buy, 2: Sell
-        
-        feature_df = self.df.drop(columns=['close'], errors='ignore')
-        self.feature_count = feature_df.shape[1]
-        obs_dim = self.feature_count + 1
-        self.observation_space = spaces.Box(
-            low=-np.inf, high=np.inf,
-            shape=(self.sequence_length, obs_dim),
-            dtype=np.float32
+        # 1. CNN Layer for local feature extraction
+        self.cnn_extractor = nn.Sequential(
+            # Input shape: (Batch, Seq_Len, Features) -> Permute to (Batch, Features, Seq_Len) for Conv1d
+            nn.Conv1d(in_channels=self.feature_dim, out_channels=cnn_out_channels, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv1d(in_channels=cnn_out_channels, out_channels=features_dim, kernel_size=3, padding=1),
+            nn.ReLU()
+            # Output shape: (Batch, features_dim, Seq_Len) -> Permute back to (Batch, Seq_Len, features_dim)
         )
-        self.reset()
+
+        # 2. Positional Encoding for the Transformer
+        self.positional_encoding = nn.Parameter(torch.zeros(1, observation_space.shape[0], features_dim))
+
+        # 3. Transformer Encoder for global context analysis
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=features_dim, 
+            nhead=transformer_n_heads, 
+            dropout=0.1,
+            batch_first=True
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=transformer_n_layers)
+        
+        # 4. Final layer to process the Transformer's output
+        # This will be the input to the Actor and Critic networks in SB3
+        self.final_layer = nn.Sequential(
+            nn.Linear(features_dim, features_dim),
+            nn.ReLU()
+        )
+        
+        logger.info(f"Hybrid CNN-Transformer policy initialized with features_dim: {features_dim}")
     
-    def reset(self, seed=None, options=None):
-        super().reset(seed=seed)
-        self.current_step = self.sequence_length
-        self.position = 0          # 0: No Position, 1: Long Position
-        self.entry_price = 0
-        self.equity = self.initial_balance
-        self.prev_equity = self.equity
-        self.trade_count = 0
-        return self._next_observation(), {}
-    
-    def step(self, action):
-        # 1. احسب قيمة المحفظة الحالية قبل اتخاذ أي إجراء جديد
-        self.prev_equity = self.equity
-        current_price = self.df.loc[self.current_step, 'close']
+    def forward(self, observations):
+        # observations shape: (batch_size, sequence_length, feature_dim)
         
-        if self.position == 1:
-            # قم بتحديث قيمة المحفظة بناءً على السعر الحالي
-            self.equity = self.initial_balance + (current_price - self.entry_price)
+        # 1. Pass through CNN
+        # Permute to fit Conv1d input requirement: (Batch, Features, Seq_Len)
+        x = observations.permute(0, 2, 1)
+        cnn_features = self.cnn_extractor(x)
+        # Permute back: (Batch, Seq_Len, Features)
+        x = cnn_features.permute(0, 2, 1)
         
-        # 2. اتخذ الإجراء الجديد بناءً على الـ action
-        self._take_action(action)
+        # 2. Add positional encoding
+        x = x + self.positional_encoding
         
-        # 3. احسب المكافأة باستخدام الطريقتين معاً
-        reward = self._get_reward(action)
+        # 3. Pass through Transformer
+        transformer_output = self.transformer_encoder(x)
         
-        # 4. قم بتحديث الخطوة
-        self.current_step += 1
+        # 4. We take the output of the last time step, which summarizes the sequence
+        final_features = transformer_output[:, -1, :]
         
-        done = self.current_step >= self.max_steps
+        # 5. Process through the final linear layer
+        extracted_features = self.final_layer(final_features)
         
-        obs = self._next_observation()
-        
-        info = {'trade_count': self.trade_count, 'equity': self.equity, 'reward': reward}
-        
-        return obs, reward, done, False, info
-        
-    def _get_reward(self, action):
-        current_price = self.df.loc[self.current_step, 'close']
-        
-        # 1. المكافأة الأساسية: الربح والخسارة المباشر من الصفقة
-        # هذه المكافأة هي الأهم وتُعلم النموذج الهدف النهائي
-        profit_loss = 0.0
-        if self.position == 1:
-            profit_loss = current_price - self.entry_price
-        
-        # 2. المكافأة المساعدة (Reward Shaping): لمساعدة النموذج على التعلم
-        # هذه المكافأة تُعطى كـ "تلميح" على قرارات معينة
-        indicator_reward = 0.0
-        try:
-            bullish_flip = self.df.loc[self.current_step, 'bullish_flip'] == 1
-            bearish_flip = self.df.loc[self.current_step, 'bearish_flip'] == 1
-            direction = self.df.loc[self.current_step, 'direction']
-            
-            # مكافأة صغيرة للاحتفاظ بصفقة في الاتجاه الصحيح
-            if self.position == 1 and direction == 1:
-                indicator_reward += 0.1 # مكافأة للحفاظ على صفقة شراء في اتجاه صاعد
-            elif self.position == -1 and direction == -1:
-                indicator_reward += 0.1 # مكافأة للحفاظ على صفقة بيع في اتجاه هابط
-
-            # عقوبة للحفاظ على صفقة في الاتجاه الخاطئ
-            elif self.position == 1 and direction == -1:
-                indicator_reward -= 0.1 # عقوبة للحفاظ على صفقة شراء في اتجاه هابط
-            elif self.position == -1 and direction == 1:
-                indicator_reward -= 0.1 # عقوبة للحفاظ على صفقة بيع في اتجاه صاعد
-            
-            # مكافأة كبيرة عند فتح صفقة جديدة في الاتجاه الصحيح
-            if (bullish_flip and action == 1) or (bearish_flip and action == 2):
-                indicator_reward += 1.0
-            
-            # عقوبة على اتخاذ قرار خاطئ تماماً
-            if (bullish_flip and action == 2) or (bearish_flip and action == 1):
-                indicator_reward -= 1.0
-                
-        except Exception as e:
-            logger.error(f"Error calculating indicator reward: {e}")
-
-        # 3. دمج المكافآت معاً
-        # مكافأة الربح والخسارة المالي هي الأساس، مع إضافة مكافأة المؤشر كدليل
-        combined_reward = (profit_loss * 0.01) + (self.indicator_reward_weight * indicator_reward)
-        return combined_reward
-        
-    def _take_action(self, action):
-        current_price = self.df.loc[self.current_step, 'close']
-        
-        if action == 1 and self.position == 0:
-            # شراء: افتح مركز جديد
-            self.position = 1
-            self.entry_price = current_price * (1 + self.slippage_pct)
-            self.trade_count += 1
-            # طبق عمولة الشراء
-            self.initial_balance -= self.initial_balance * self.commission_pct
-            logger.info(f"Step {self.current_step}: BUY @ {current_price:.2f}. Entry Price: {self.entry_price:.2f}")
-
-        elif action == 2 and self.position == 1:
-            # بيع: أغلق المركز الحالي
-            self.position = 0
-            # احسب الربح/الخسارة وأضفه إلى رصيد الحساب
-            profit_loss = (current_price - self.entry_price)
-            self.initial_balance = self.initial_balance + profit_loss
-            # طبق عمولة البيع
-            self.initial_balance -= self.initial_balance * self.commission_pct
-            self.entry_price = 0
-            self.trade_count += 1
-            logger.info(f"Step {self.current_step}: SELL @ {current_price:.2f}. Profit/Loss: {profit_loss:.2f}")
-
-    def _next_observation(self):
-        start_idx = max(0, self.current_step - self.sequence_length + 1)
-        end_idx = self.current_step
-        
-        features_df = self.df.loc[start_idx:end_idx].drop(columns=['close'], errors='ignore')
-        features = features_df.values
-        
-        position_feature = np.zeros((len(features), 1))
-        if self.position == 1:
-            position_feature.fill(1)
-            
-        obs = np.concatenate([features, position_feature], axis=1)
-
-        if len(obs) < self.sequence_length:
-            padding = np.zeros((self.sequence_length - len(obs), obs.shape[1]))
-            obs = np.vstack([padding, obs])
-            
-        return obs.astype(np.float32)
+        return extracted_features
