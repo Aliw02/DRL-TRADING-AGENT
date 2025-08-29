@@ -1,144 +1,129 @@
-# Technical indicators implementation
-import pandas as pd
-import numpy as np
-from numba import jit
-from utils.logger import get_logger
-
-logger = get_logger(__name__)
+# utils/custom_indicators.py (FINAL PROFESSIONAL VERSION)
 
 import pandas as pd
 import numpy as np
 import talib as ta
+from utils.logger import get_logger
 
-# --- Helper functions for Custom Calculations (prefixed with _) ---
+logger = get_logger(__name__)
 
-def _calculate_chandelier_exit(high, low, close, period=7, multiplier=4):
-    """Custom calculation for Chandelier Exit."""
-    atr = ta.ATR(high, low, close, timeperiod=period)
-    
-    long_stop = high.rolling(window=period).max() - atr * multiplier
-    short_stop = low.rolling(window=period).min() + atr * multiplier
-    
-    # Use shifted values for comparing with current close
-    direction = np.where(close > long_stop.shift(1), 1, 
-                         np.where(close < short_stop.shift(1), -1, 0))
-    direction = pd.Series(direction, index=close.index).ffill().fillna(0)
-    
-    bullish_flip = ((direction == 1) & (direction.shift(1) == -1)).astype(int)
-    bearish_flip = ((direction == -1) & (direction.shift(1) == 1)).astype(int)
-    
-    dist_to_stop = np.where(direction == 1, close - long_stop, short_stop - close)
-    
-    return direction, bullish_flip, bearish_flip, dist_to_stop, long_stop, short_stop
+# --- Helper functions for advanced features ---
 
-def _add_fibonacci_levels(df: pd.DataFrame, window=100):
-    """Calculates objective Fibonacci Retracement levels."""
-    rolling_high = df['high'].rolling(window=window, min_periods=window).max()
-    rolling_low = df['low'].rolling(window=window, min_periods=window).min()
-
-    diff = rolling_high - rolling_low
-    df['dist_to_fib_0.382'] = abs(df['close'] - (rolling_high - diff * 0.382))
-    df['dist_to_fib_0.618'] = abs(df['close'] - (rolling_high - diff * 0.618))
+def _add_multi_timeframe_features(df: pd.DataFrame):
+    """
+    Engineers features from higher timeframes (M15, H1) to provide broader context.
+    """
+    logger.info("Engineering multi-timeframe features (M15, H1)...")
+    df_m15 = df['close'].resample('15T').ohlc()
+    df_h1 = df['close'].resample('1H').ohlc()
     
+    df['rsi_m15'] = ta.RSI(df_m15['close'], timeperiod=14).reindex(df.index, method='ffill')
+    df['rsi_h1'] = ta.RSI(df_h1['close'], timeperiod=14).reindex(df.index, method='ffill')
+    df['adx_m15'] = ta.ADX(df_m15['high'], df_m15['low'], df_m15['close'], timeperiod=14).reindex(df.index, method='ffill')
+    df['adx_h1'] = ta.ADX(df_h1['high'], df_h1['low'], df_h1['close'], timeperiod=14).reindex(df.index, method='ffill')
     return df
 
-def _add_advanced_interaction_features(df: pd.DataFrame):
-    """Calculates interaction and market regime features."""
-    df['rsi_x_adx'] = (df['rsi'] / 100) * (df['adx'] / 100) * 100
-    bbw_mean = df['bb_width'].rolling(window=50).mean()
-    df['market_regime'] = np.where(df['bb_width'] > bbw_mean, 1, 0)
-
+def _add_volatility_normalized_features(df: pd.DataFrame):
+    """
+    Normalizes non-bounded indicators by volatility (ATR).
+    """
+    logger.info("Engineering volatility-normalized features...")
+    df['atr'] = ta.ATR(df['high'], df['low'], df['close'], timeperiod=14)
+    safe_atr = df['atr'].replace(0, 1e-9)
+    if 'macd' in df.columns:
+        df['macd_norm'] = df['macd'] / safe_atr
+    if 'roc' in df.columns:
+        df['roc_norm'] = df['roc'] / safe_atr
     return df
 
-def _add_contextual_features(df: pd.DataFrame):
-    """Adds features based on price action, time, and momentum dynamics."""
-    body_size = abs(df['close'] - df['open'])
-    candle_range = df['high'] - df['low']
-    df['body_to_wick_ratio'] = body_size / candle_range.replace(0, 0.0001)
-
-    df['hour_of_day'] = df.index.hour
-    df['day_of_week'] = df.index.dayofweek
-
-    df['rsi_change'] = df['rsi'].diff()
-    df['dist_from_ma_slow'] = (df['close'] - df['ma_slow']) / df['ma_slow']
-
+def _add_candlestick_features(df: pd.DataFrame):
+    """
+    Engineers features based on common candlestick patterns.
+    The output is binary (100 for pattern found, 0 otherwise).
+    """
+    logger.info("Engineering candlestick pattern features...")
+    op, hi, lo, cl = df['open'], df['high'], df['low'], df['close']
+    
+    # List of TA-Lib candlestick pattern functions to run
+    pattern_functions = {
+        'CDL2CROWS': ta.CDL2CROWS,
+        'CDL3BLACKCROWS': ta.CDL3BLACKCROWS,
+        'CDLENGULFING': ta.CDLENGULFING,
+        'CDLHAMMER': ta.CDLHAMMER,
+        'CDLHARAMI': ta.CDLHARAMI,
+        'CDLINVERTEDHAMMER': ta.CDLINVERTEDHAMMER,
+        'CDLSHOOTINGSTAR': ta.CDLSHOOTINGSTAR,
+        'CDLDOJI': ta.CDLDOJI,
+    }
+    
+    for name, func in pattern_functions.items():
+        # Divide by 100 to get a simple 1 (bullish), -1 (bearish), or 0 signal
+        df[name] = func(op, hi, lo, cl) / 100
+        
     return df
 
-# --- Main Calculation Function ---
+def _add_time_features(df: pd.DataFrame):
+    """
+    Engineers cyclical time-based features for hour and day of the week.
+    This helps the model understand weekly and daily seasonality.
+    """
+    logger.info("Engineering cyclical time-based features...")
+    # Make sure index is datetime
+    if isinstance(df.index, pd.DatetimeIndex):
+        # Hour features
+        hour = df.index.hour
+        df['hour_sin'] = np.sin(2 * np.pi * hour / 24)
+        df['hour_cos'] = np.cos(2 * np.pi * hour / 24)
+        
+        # Day of week features
+        day = df.index.dayofweek # Monday=0, Sunday=6
+        df['day_sin'] = np.sin(2 * np.pi * day / 7)
+        df['day_cos'] = np.cos(2 * np.pi * day / 7)
+    return df
+
+
+# --- Main Calculation Function (Updated) ---
 
 def calculate_all_indicators(df: pd.DataFrame):
     """
-    Calculate all technical indicators and advanced features using TA-Lib for speed and accuracy.
+    Calculate all technical indicators and advanced features.
     This is the main function to be called from the data transformation step.
     """
-    # Ensure DataFrame index is a datetime object for time-based features
     if not isinstance(df.index, pd.DatetimeIndex):
-        # Attempt to convert the index, assuming it's a valid datetime format
         try:
-            df.index = pd.to_datetime(df.index)
+            df.set_index(pd.to_datetime(df['time']), inplace=True)
         except Exception as e:
-            print(f"Warning: Could not convert index to DatetimeIndex. Time-based features will be skipped. Error: {e}")
-
+            logger.error(f"Could not convert index to DatetimeIndex. Time-based features will be skipped. Error: {e}")
+            return df
 
     # --- Step 1: Calculate Base Indicators using TA-Lib ---
-    # TA-Lib requires numpy arrays as input (float64)
-    # Ensure inputs are double precision numpy arrays to avoid TA-Lib errors
-    high_prices = np.asarray(df['high'].values, dtype='double')
-    low_prices = np.asarray(df['low'].values, dtype='double')
-    close_prices = np.asarray(df['close'].values, dtype='double')
+    logger.info("Calculating base TA-Lib indicators...")
+    high, low, close = df['high'].values, df['low'].values, df['close'].values
     
-    # Standard Indicators
-    df['rsi'] = ta.RSI(close_prices, timeperiod=14)
-    df['adx'] = ta.ADX(high_prices, low_prices, close_prices, timeperiod=14)
-    df['plus_di'] = ta.PLUS_DI(high_prices, low_prices, close_prices, timeperiod=14)
-    df['minus_di'] = ta.MINUS_DI(high_prices, low_prices, close_prices, timeperiod=14)
-    df['ma_fast'] = ta.SMA(close_prices, timeperiod=10)
-    df['ma_slow'] = ta.SMA(close_prices, timeperiod=50)
+    df['rsi'] = ta.RSI(close, timeperiod=14)
+    df['adx'] = ta.ADX(high, low, close, timeperiod=14)
+    df['macd'], df['macd_signal'], _ = ta.MACD(close, fastperiod=12, slowperiod=26, signalperiod=9)
     
-    macd, macd_signal, _ = ta.MACD(close_prices, fastperiod=12, slowperiod=26, signalperiod=9)
-    df['macd'] = macd
-    df['macd_signal'] = macd_signal
+    # --- FIX: Correctly unpack and calculate Bollinger Bands ---
+    upper_band, middle_band, lower_band = ta.BBANDS(close, timeperiod=20, nbdevup=2, nbdevdn=2, matype=0)
+    # Calculate width relative to the middle band to avoid division by zero
+    safe_middle_band = np.where(middle_band == 0, 1e-9, middle_band)
+    df['bb_width'] = (upper_band - lower_band) / safe_middle_band
     
-    upper_band, middle_band, lower_band = ta.BBANDS(close_prices, timeperiod=20, nbdevup=2, nbdevdn=2, matype=0)
-    # Avoid division by zero for bb_width
-    middle_band[middle_band == 0] = 1e-6 # a small number to prevent error
-    df['bb_width'] = (upper_band - lower_band) / middle_band
+    df['roc'] = ta.ROC(close, timeperiod=10)
     
-    df['roc'] = ta.ROC(close_prices, timeperiod=10)
-    df['volatility'] = ta.STDDEV(close_prices, timeperiod=20)
-    if 'volume' in df.columns:
-        # Ensure volume array is double precision for TA-Lib
-        volume_values = np.asarray(df['volume'].values, dtype='double')
-        df['volume_ma'] = ta.SMA(volume_values, timeperiod=20)
-        # Avoid division by zero for volume_ratio
-        volume_ma_safe = df['volume_ma'].replace(0, 1e-6)
-        df['volume_ratio'] = df['volume'] / volume_ma_safe
-        df['volume_ratio'] = df['volume'] / volume_ma_safe
+    # --- Step 2: Engineer Advanced and Contextual Features ---
+    df = _add_multi_timeframe_features(df)
+    df = _add_volatility_normalized_features(df)
+    df = _add_candlestick_features(df)
+    df = _add_time_features(df)
 
-    # --- Step 2: Calculate Custom Indicators & Features ---
-    # Chandelier Exit is custom and remains as a manual calculation
-   
-    # --- HERE IS THE FIX ---
-    direction, bullish_flip, bearish_flip, dist_to_stop, long_stop, short_stop = _calculate_chandelier_exit(df['high'], df['low'], df['close'])
-    
-    df['direction'] = direction
-    df['bullish_flip'] = bullish_flip
-    df['bearish_flip'] = bearish_flip
-    df['dist_to_stop'] = dist_to_stop
-    df['ce_ground'] = long_stop  
-    df['ce_roof'] = short_stop   
-
-
-    # --- Step 3: Calculate Advanced Level-Based and Contextual Features ---
-    df = _add_fibonacci_levels(df, window=100)
-    df = _add_advanced_interaction_features(df)
-    df = _add_contextual_features(df)
-
-    # --- Step 4: Final Cleanup ---
-    # Using forward-fill is often safer for time-series to avoid lookahead bias.
-    # --- الكود الجديد والصحيح الذي يزيل التحذير ---
+    # --- Step 3: Final Cleanup ---
+    logger.info("Cleaning up NaN values from feature engineering...")
+    # Drop columns that are intermediate calculations and not features
+    df.drop(columns=['atr'], inplace=True, errors='ignore')
     df.ffill(inplace=True)
-    df.bfill(inplace=True) # Back-fill any NaNs at the beginning
+    df.bfill(inplace=True) 
     
-    print("All indicators and features calculated successfully using TA-Lib.")
+    logger.info(f"Feature engineering complete. Total features: {len(df.columns)}")
     return df

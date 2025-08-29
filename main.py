@@ -1,53 +1,90 @@
+# trading_agent.py (NEW WORKFLOW ORCHESTRATOR)
+
+import os
+import sys
 import argparse
-from scripts.train_agent import train_agent
-from scripts.backtest_agent import backtest_agent
-from scripts.plot_results import plot_results
+
+# --- Add project root to the Python path ---
+# This allows us to import modules from other directories like 'scripts' and 'utils'
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# --- Import the core functions from our scripts ---
+from scripts.train_agent import run_walk_forward_training, run_finetuning_for_live_trading
+from scripts.analyze_features import analyze_model_features
+from scripts.backtest_agent import run_backtest
 from utils.logger import setup_logging, get_logger
 
-def main():
-    """Main entry point for the DRL trading agent"""
-    # Setup logging
+def main(skip_training=False):
+    """
+    Orchestrates the full, end-to-end workflow for the DRL Trading Agent.
+    It runs the following stages in sequence:
+    1. Full Walk-Forward Training.
+    2. Fine-tuning the best model for live trading.
+    3. Analyzing the final model's feature importance using SHAP.
+    4. Backtesting the final model on unseen data.
+    """
+    # Initialize our structured logging
     setup_logging()
     logger = get_logger(__name__)
-    
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description="XAUUSD DRL Trading Agent")
-    parser.add_argument("--train", action="store_true", help="Train the agent")
-    parser.add_argument("--backtest", action="store_true", help="Backtest the agent")
-    parser.add_argument("--plot", action="store_true", help="Plot results")
-    parser.add_argument("--model-path", type=str, default="results/models/xauusd_trading_agent_final", 
-                       help="Path to the trained model")
-    
-    args = parser.parse_args()
-    
+
     try:
-        # Train if requested
-        if args.train:
-            logger.info("Starting training process")
-            model = train_agent()
+        if not skip_training:
+            # --- STAGE 1: TRAINING ---
+            print("="*80)
+            print("STAGE 1: Starting Walk-Forward Training...")
+            print("This is the longest stage, where the agent learns on expanding windows of data.")
+            print("="*80)
+            run_walk_forward_training()
+            print("✅ STAGE 1: Walk-Forward Training completed successfully.")
+
+            # --- STAGE 2: FINE-TUNING ---
+            print("="*80)
+            print("STAGE 2: Starting Fine-Tuning of the Best Model...")
+            print("The best model from the last split is now trained on the entire dataset.")
+            print("="*80)
+            run_finetuning_for_live_trading()
+            print("✅ STAGE 2: Fine-Tuning completed successfully.")
         else:
-            model = None
-        
-        # Backtest if requested
-        if args.backtest:
-            logger.info("Starting backtesting process")
-            equity_curve, trades, metrics = backtest_agent(args.model_path)
-            
-            # Print metrics
-            print("\nBacktest Results:")
-            for key, value in metrics.items():
-                print(f"{key}: {value}")
-        
-        # Plot if requested
-        if args.plot and args.backtest:
-            logger.info("Generating plots")
-            plot_results(equity_curve, trades)
-        
-        logger.info("Process completed successfully")
-        
+            print("Skipping Training and Fine-Tuning stages as requested.")
+
+        # --- STAGE 3: ANALYSIS ---
+        print("="*80)
+        print("STAGE 3: Analyzing Final Model's Feature Importance...")
+        print("Using SHAP to understand what the model has learned.")
+        print("="*80)
+        analyze_model_features()
+        print("✅ STAGE 3: Feature analysis completed successfully.")
+
+        # --- STAGE 4: BACKTESTING ---
+        print("="*80)
+        print("STAGE 4: Backtesting Final Model on Unseen Data...")
+        print("Simulating the agent's performance on new historical data.")
+        print("="*80)
+        run_backtest()
+        print("✅ STAGE 4: Backtesting completed successfully.")
+
+        print("\n\n" + "*"*30)
+        print(">>> FULL WORKFLOW COMPLETED! <<<")
+        print("*"*30)
+        print("Your agent is trained, analyzed, and backtested. It is ready for live deployment.")
+
+    except FileNotFoundError as e:
+        print(f"A required file was not found: {e}")
+        print("Please ensure your data files and model paths are correct.")
+        print("Workflow terminated prematurely.")
     except Exception as e:
-        logger.error(f"Error in main process: {e}")
-        raise
+        print(f"An unexpected error occurred during the workflow: {e}")
+        print("Workflow terminated prematurely.")
 
 if __name__ == "__main__":
-    main()
+    # We can add a command-line argument to skip the lengthy training process
+    # if we only want to run analysis and backtesting on an existing model.
+    parser = argparse.ArgumentParser(description="Run the full DRL Trading Agent workflow.")
+    parser.add_argument(
+        '--skip-training',
+        action='store_true',
+        help="Skip the training and fine-tuning stages and run analysis/backtesting on existing models."
+    )
+    args = parser.parse_args()
+    
+    main(skip_training=args.skip_training)
