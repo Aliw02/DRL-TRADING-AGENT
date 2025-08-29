@@ -1,0 +1,59 @@
+# Training parameters
+training:
+  total_timesteps: 100000
+  learning_rate: 0.0001    # <-- قلل معدل التعلم لخطوات أدق
+  n_steps: 4096            # <-- زد عدد الخطوات لتعلم الأنماط طويلة المدى
+  batch_size: 128
+  n_epochs: 15
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.07      
+
+  walk_forward:
+    n_splits: 5
+    min_train_size: 60000
+    test_size: 15000
+
+# Environment parameters
+environment:
+  initial_balance: 100
+  sequence_length: 40
+  action_penalty: -0.01  # Small penalty for trading actions
+
+  commission_pct: 0.0005
+  slippage_pct: 0.0002
+
+# Data parameters
+# Data parameters
+data:
+  file_path: "/content/drive/MyDrive/DRL_Model_DeepSeek/data/XAUUSD-FULL.csv"
+  train_test_split: 0.8
+  feature_columns:
+    # --- Core Chandelier Exit Features ---
+    - direction
+    - bullish_flip
+    - bearish_flip
+    - dist_to_stop
+    # --- Basic Momentum Indicator ---
+    - rsi
+    - body_to_wick_ratio
+    - hour_of_day
+    - day_of_week
+    - rsi_change
+    - dist_from_ma_slow
+    - rsi_x_adx
+    - market_regime
+
+# Model parameters
+model:
+  features_dim: 256
+  ce_stream_hidden: 64
+  context_stream_hidden: 128
+  position_stream_hidden: 16
+
+# Logging parameters
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "results/logs/trading_agent.log"
