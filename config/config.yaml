@@ -27,7 +27,6 @@ environment:
 # Data parameters
 # Data parameters
 data:
-  file_path: "/content/drive/MyDrive/DRL_Model_DeepSeek/data/XAUUSD-FULL.csv"
   train_test_split: 0.8
 
 

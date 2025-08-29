@@ -8,7 +8,7 @@ import sys
 # --- Add project path to access other modules ---
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from utils.custom_indicators import calculate_all_indicators
-from sb3_contrib import RecurrentPPO
+from stable_baselines3 import PPO # Use PPO for custom feature extractor policies
 from utils.data_transformation import DataTransformer
 from config.init import config
 from envs.trading_env import TradingEnv
@@ -53,22 +53,20 @@ def load_tickstory_data(file_path):
     df = df.drop(columns=['spread'], errors='ignore')
     return df
 
-
+from config import paths # Import paths
 def run_backtest():
-    """
-    Runs a full trading simulation on new data.
-    """
     print("===== Starting Backtesting Process =====")
     
     try:
-        model = RecurrentPPO.load(FINAL_MODEL_PATH)
-        scaler = joblib.load(FINAL_SCALER_PATH)
+        # --- Use the centralized paths ---
+        model = PPO.load(str(paths.FINAL_MODEL_PATH)) # Use PPO
+        scaler = joblib.load(str(paths.FINAL_SCALER_PATH))
         print("Model and Scaler loaded successfully.")
     except FileNotFoundError as e:
         print(f"Error: Model or Scaler files not found. {e}")
         return
 
-    test_df = load_tickstory_data(file_path=TEST_DATA_PATH)
+    test_df = load_tickstory_data(file_path=str(paths.BACKTEST_DATA_FILE))
     test_df = calculate_all_indicators(test_df) # Calculate all indicators on the test data
 
     # --- THE FIX: SEPARATING DATA FOR MODEL AND FOR LOGIC ---
