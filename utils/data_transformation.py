@@ -35,7 +35,8 @@ class DataTransformer:
             logger.info("--> STEP 1.1: Raw data loaded successfully.")
 
             # --- Combine date and time columns and set as index ---
-            df['timestamp'] = pd.to_datetime(df['date'] + ' ' + df['time'], errors='coerce')
+            # السطر الجديد والمحسن
+            df['timestamp'] = pd.to_datetime(df['date'] + ' ' + df['time'], format='%Y-%m-%d %H:%M', errors='coerce')
             df.set_index('timestamp', inplace=True)
             df.drop(columns=['date', 'time'], inplace=True)
             
