@@ -36,7 +36,7 @@ def main():
         
         logger.info(f"Preprocessing complete. Shape of the final data: {processed_df.shape}")
         logger.info(f"Saving processed data to Parquet format at: {output_path}")
-
+        
         # Save to Parquet format
         processed_df.to_parquet(output_path)
 

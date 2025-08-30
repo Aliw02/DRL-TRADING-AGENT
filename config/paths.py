@@ -20,6 +20,7 @@ print(f"Project Root Directory determined as: {ROOT_DIR}")
 DATA_DIR = ROOT_DIR / "data"
 # Define your specific data files here
 TRAIN_DATA_FILE = DATA_DIR / "XAUUSDM1-FULL.csv"  # Example training data file
+TRAIN_DATA_FILE_TEST = DATA_DIR / "XAUUSDM1-FULL-TEST.csv"  # Example training data file
 BACKTEST_DATA_FILE = DATA_DIR / "XAUUSDM15-TEST-UNSEEN.csv" # Example backtest data file
 
 # --- RESULTS FOLDER ---

@@ -14,8 +14,8 @@ def _add_multi_timeframe_features(df: pd.DataFrame):
     Engineers features from higher timeframes (M15, H1) to provide broader context.
     """
     logger.info("Engineering multi-timeframe features (M15, H1)...")
-    df_m15 = df['close'].resample('15T').ohlc()
-    df_h1 = df['close'].resample('1H').ohlc()
+    df_m15 = df['close'].resample('15min').ohlc()
+    df_h1 = df['close'].resample('1h').ohlc()
     
     df['rsi_m15'] = ta.RSI(df_m15['close'], timeperiod=14).reindex(df.index, method='ffill')
     df['rsi_h1'] = ta.RSI(df_h1['close'], timeperiod=14).reindex(df.index, method='ffill')
@@ -98,6 +98,7 @@ def calculate_all_indicators(df: pd.DataFrame):
 
     # --- Step 1: Calculate Base Indicators using TA-Lib ---
     logger.info("Calculating base TA-Lib indicators...")
+    logger.info(f"Data Shape before feature engineering: {df.shape}")
     high, low, close = df['high'].values, df['low'].values, df['close'].values
     
     df['rsi'] = ta.RSI(close, timeperiod=14)
@@ -124,6 +125,7 @@ def calculate_all_indicators(df: pd.DataFrame):
     df.drop(columns=['atr'], inplace=True, errors='ignore')
     df.ffill(inplace=True)
     df.bfill(inplace=True) 
-    
+
+    logger.info(f"Data Shape after feature engineering: {df.shape}")
     logger.info(f"Feature engineering complete. Total features: {len(df.columns)}")
     return df

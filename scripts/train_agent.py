@@ -149,6 +149,9 @@ def run_walk_forward_training():
     # Reading from Parquet is much faster and uses less RAM
     full_df = pd.read_parquet(processed_data_path)
     
+    if full_df.empty or len(full_df) < 1000:
+        raise ValueError("The loaded preprocessed data is empty or too small. Please check the preprocessing step.")
+    
     wf_config = config.get('training.walk_forward', {})
     n_splits = wf_config.get('n_splits', 5)
     min_train_size = wf_config.get('min_train_size', 60000)
