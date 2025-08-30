@@ -46,7 +46,9 @@ class DataTransformer:
             logger.info("--> STEP 1.3: All features calculated.")
             
             processed_df = df_with_features.copy()
+            print("Before dropping NA: " + str(processed_df.shape))
             processed_df.dropna(inplace=True)
+            print("After dropping NA: " + str(processed_df.shape))
 
             logger.info(f"Data preprocessing complete. Final shape: {processed_df.shape}")
             return processed_df
