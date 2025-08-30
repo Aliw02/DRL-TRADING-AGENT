@@ -1,4 +1,4 @@
-# utils/data_transformation.py (UPDATED FOR WHITESPACE-SEPARATED FORMAT)
+# utils/data_transformation.py (FINAL CORRECTED VERSION)
 
 import pandas as pd
 from utils.logger import get_logger
@@ -8,37 +8,27 @@ logger = get_logger(__name__)
 
 class DataTransformer:
     """
-    Handles loading data from a whitespace-separated format and
-    engineering all necessary features for the trading agent.
+    Loads a CLEAN, comma-separated data file and engineers all features.
     """
     def load_and_preprocess_data(self, file_path):
-        """
-        Loads data with a format like: 'YYYY-MM-DD HH:MM OPEN HIGH LOW CLOSE VOLUME'
-        separated by one or more spaces/tabs.
-        """
         try:
-            logger.info(f"Loading whitespace-separated data from: {file_path}")
+            logger.info(f"Loading CLEAN, COMMA-SEPARATED data from: {file_path}")
             
-            # --- Define column names for the new format ---
-            column_names = ['date', 'time', 'open', 'high', 'low', 'close', 'volume']
+            # --- Define column names for the clean format ---
+            column_names = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
             
-            # --- Read the data using a regular expression for the separator ---
-            # '\s+' tells pandas to treat one or more spaces/tabs as a single separator.
+            # --- Read the data as a standard CSV file ---
+            # This now matches the output of our cleansing script.
             df = pd.read_csv(
                 file_path, 
-                sep=r'\s+', # This is the key change
+                sep=',', # The separator is now a comma
                 header=None,
                 names=column_names,
-                dtype={'date': str, 'time': str}
+                parse_dates=['timestamp'] # Tell pandas to treat the first column as a date
             )
-
-            logger.info("--> STEP 1.1: Raw data loaded successfully.")
-
-            # --- Combine date and time columns and set as index ---
-            # السطر الجديد والمحسن
-            df['timestamp'] = pd.to_datetime(df['date'] + ' ' + df['time'], format='%Y-%m-%d %H:%M', errors='coerce')
+            
+            # --- Set the timestamp as the DataFrame index ---
             df.set_index('timestamp', inplace=True)
-            df.drop(columns=['date', 'time'], inplace=True)
             
             # --- Cleanse the data ---
             original_rows = len(df)
@@ -46,14 +36,14 @@ class DataTransformer:
             df = df[df.index.notna()]
             new_rows = len(df)
             if original_rows > new_rows:
-                logger.warning(f"Removed {original_rows - new_rows} rows with invalid timestamps or data.")
+                logger.warning(f"Removed {original_rows - new_rows} rows with invalid data.")
 
-            logger.info("--> STEP 1.2: Timestamp index created and cleansed.")
+            logger.info("--> STEP 1.1: Clean data loaded successfully.")
 
             # --- Calculate all features ---
-            logger.info("--> STEP 1.3: Starting advanced feature engineering...")
+            logger.info("--> STEP 1.2: Starting advanced feature engineering...")
             df_with_features = calculate_all_indicators(df)
-            logger.info("--> STEP 1.4: All features calculated.")
+            logger.info("--> STEP 1.3: All features calculated.")
             
             processed_df = df_with_features.copy()
             processed_df.dropna(inplace=True)
