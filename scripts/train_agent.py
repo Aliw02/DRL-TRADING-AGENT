@@ -1,7 +1,8 @@
-# scripts/train_agent.py (COMPLETELY RE-ARCHITECTED FOR WALK-FORWARD & FINE-TUNING)
+# scripts/train_agent.py (MODIFIED FOR PARALLEL ENVIRONMENTS)
 import os, sys, pandas as pd, joblib, torch
 from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import EvalCallback
+from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.monitor import Monitor
 from sklearn.preprocessing import RobustScaler
 
@@ -22,11 +23,17 @@ def train_one_segment(train_df: pd.DataFrame, eval_df: pd.DataFrame, save_path_p
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_save_path, exist_ok=True)
 
-    train_env = Monitor(TradingEnv(train_df), str(log_dir))
+    # --- MODIFICATION: Create 8 parallel environments for training ---
+    # We create a lambda function to pass arguments to the environment constructor
+    train_env_lambda = lambda: TradingEnv(train_df)
+    train_env = make_vec_env(train_env_lambda, n_envs=8) # Using 8 environments
+
+    # Evaluation environment should remain single for consistency
     eval_env = Monitor(TradingEnv(eval_df), str(log_dir) + "_eval")
 
     eval_callback = EvalCallback(eval_env, best_model_save_path=str(model_save_path),
                                  log_path=str(log_dir), eval_freq=10000, deterministic=True)
+
 
     policy_kwargs = dict(features_extractor_class=CustomActorCriticPolicy,
                        features_extractor_kwargs=dict(features_dim=config.get('model.features_dim')))

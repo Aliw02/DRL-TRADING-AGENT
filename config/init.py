@@ -1,25 +1,29 @@
-# config/init.py (ROBUST AND CORRECTED VERSION)
-
 import yaml
-import os
 from pathlib import Path
 
 class Config:
     """
-    Configuration management class that robustly finds its config file.
+    Configuration management class that can load a specific config file.
     """
-    def __init__(self):
-        # --- CRITICAL FIX: Build the absolute path to the config file ---
-        # This finds the directory where this 'init.py' file lives,
-        # then looks for 'config.yaml' inside that same directory.
-        # This makes it work regardless of the script's working directory.
-        self.config_path = Path(__file__).parent / "config.yaml"
+    def __init__(self, config_path: str = 'config/config.yaml'):
+        """
+        Initializes the Config object.
+        Args:
+            config_path (str): The path to the YAML configuration file to load.
+        """
+        # --- CRITICAL FIX: The constructor now accepts a config_path ---
+        self.config_path = Path(config_path)
         self.config = self._load_config()
 
     def _load_config(self):
-        """Load configuration from YAML file using the absolute path."""
+        """Load configuration from the specified YAML file."""
         if not self.config_path.is_file():
-            raise FileNotFoundError(f"Config file not found at the expected path: {self.config_path}")
+            # Also check for the default path relative to this file's location
+            default_path = Path(__file__).parent / "config.yaml"
+            if default_path.is_file():
+                self.config_path = default_path
+            else:
+                raise FileNotFoundError(f"Config file not found at the specified path: {self.config_path}")
         
         with open(self.config_path, 'r') as f:
             config_data = yaml.safe_load(f)
@@ -39,6 +43,6 @@ class Config:
 
     def __getitem__(self, key):
         return self.get(key)
-    
-# Global configuration instance, accessible throughout the project
+
+# A default global instance for modules that don't need a specific config
 config = Config()
