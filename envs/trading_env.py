@@ -20,8 +20,9 @@ class TradingEnv(gym.Env):
         self.sequence_length = sequence_length or config.get('environment.sequence_length', 150)
         self.commission_pct = config.get('environment.commission_pct', 0.0005)
         
-        self.action_penalty = config.get('environment.action_penalty', 0.1)
-        self.profit_bonus_multiplier = config.get('environment.profit_bonus', 2.0)
+        # --- Reward Shaping Parameters ---
+        self.action_penalty = config.get('environment.action_penalty', 0.1) # Penalty for taking an action
+        self.profit_bonus_multiplier = config.get('environment.profit_bonus', 2.0) # Bonus for closing a profitable trade
 
         self.action_space = spaces.Discrete(3)
         self.feature_cols = [col for col in self.df.columns if col not in ['open', 'high', 'low', 'close', 'time']]
@@ -42,6 +43,7 @@ class TradingEnv(gym.Env):
     
     def step(self, action):
         prev_portfolio_value = self.portfolio_value
+        
         realized_pnl = self._take_action(action)
         self._update_portfolio_value()
         reward = self._get_reward(prev_portfolio_value, realized_pnl)
@@ -73,14 +75,15 @@ class TradingEnv(gym.Env):
         current_price = self.df.loc[self.current_step, 'close']
         realized_pnl = 0
         
-        if action == 1 and self.position == 0:
+        if action == 1 and self.position == 0: # Open a new long position
             self.position = 1
             self.entry_price = current_price
             self.trade_start_balance = self.portfolio_value
             self.trade_count += 1
+            # Apply action penalty as a cost
             self.portfolio_value -= self.action_penalty
 
-        elif action == 2 and self.position == 1:
+        elif action == 2 and self.position == 1: # Close an existing long position
             exit_price = current_price
             realized_pnl = (exit_price - self.entry_price)
             
@@ -94,17 +97,11 @@ class TradingEnv(gym.Env):
         return realized_pnl
             
     def _next_observation(self):
-        # --- THE CRITICAL FIX IS HERE ---
-        # The slice should end at 'self.current_step' (inclusive), not 'self.current_step + 1'
-        # This guarantees the length is always exactly 'self.sequence_length'.
-        start_idx = self.current_step - self.sequence_length + 1
+        start_idx = max(0, self.current_step - self.sequence_length)
         end_idx = self.current_step
         
-        # Ensure start index is not negative
-        if start_idx < 0:
-            start_idx = 0
-            
-        features_df = self.df.loc[start_idx:end_idx, self.feature_cols]
+        # Use .iloc for integer-based slicing, which is safer
+        features_df = self.df.iloc[start_idx:end_idx][self.feature_cols]
         
         position_feature = np.zeros((len(features_df), 1))
         if self.position == 1:
@@ -117,4 +114,3 @@ class TradingEnv(gym.Env):
             obs = np.vstack([padding, obs])
             
         return obs.astype(np.float32)
-

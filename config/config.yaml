@@ -1,15 +1,18 @@
-# Training parameters
 training:
   total_timesteps: 1000000
-  learning_rate: 0.0001    # <-- قلل معدل التعلم لخطوات أدق
-  n_steps: 4096            # <-- زد عدد الخطوات لتعلم الأنماط طويلة المدى
+  learning_rate: 0.0001
+  n_steps: 4096
   batch_size: 128
   n_epochs: 10
   gamma: 0.99
   gae_lambda: 0.95
   clip_range: 0.2
-  ent_coef: 0.01      
+  ent_coef: 0.01
 
+  # --- CRITICAL: Enable Vectorized Environments to maximize GPU usage ---
+  n_envs: 8 # Use 8 parallel environments (a good number for Kaggle CPUs)
+
+  # Enhanced walk-forward settings for large dataset
   walk_forward:
     n_splits: 10
     min_train_size: 1000000
@@ -17,27 +20,15 @@ training:
 
 # Environment parameters
 environment:
-  initial_balance: 100
-  sequence_length: 40
-  action_penalty: -0.01  # Small penalty for trading actions
+  initial_balance: 10000
+  sequence_length: 150 # Increased sequence length for Transformer
 
-  commission_pct: 0.0005
-  slippage_pct: 0.0002
-
-# Data parameters
-# Data parameters
-data:
-  train_test_split: 0.8
-
-
-# Model parameters
-# model parameters
+# Model parameters for the Hybrid CNN-Transformer
 model:
   features_dim: 256
   cnn_out_channels: 64
   transformer_n_heads: 4
   transformer_n_layers: 2
-
 
 # Logging parameters
 logging:
