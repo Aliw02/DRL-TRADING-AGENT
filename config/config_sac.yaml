@@ -1,35 +1,35 @@
+
 # config/config_sac.yaml
-# Professional Hyperparameters for the SAC agent with Walk-Forward and Fine-Tuning
+# Professional Hyperparameters for the SAC agent, adjusted for the 15-min dataset.
 
 training:
   # Base SAC parameters used during each walk-forward split
   learning_rate: 0.0001
-  buffer_size: 500000
+  buffer_size: 200000  # A large buffer is still good for off-policy learning
   batch_size: 256
   tau: 0.005
   gamma: 0.99
   train_freq: [1, "step"]
   learning_starts: 10000
   
-  # --- Professional Walk-Forward Training Settings ---
+  # --- Professional Walk-Forward Training Settings (CORRECTED) ---
   walk_forward:
-    n_splits: 5
-    min_train_size: 800000   # Initial training set size
-    test_size: 200000    # Size of the validation set for each split
-    timesteps_per_split: 150000 # Training duration for each split
+    n_splits: 2
+    min_train_size: 150000       # Use 150k for the first training run
+    test_size: 40000         # Use 40k for validation in each split
+    timesteps_per_split: 120000  # Reduced for faster runs on Kaggle
 
   # --- Professional Fine-Tuning Settings for Production Model ---
   fine_tuning:
-    recent_data_years: 2.5   # Use the last 2.5 years of data
-    total_timesteps: 400000  # Duration of the fine-tuning stage
-    learning_rate: 0.00001   # Use a much smaller learning rate for fine-tuning
+    recent_data_years: 2.5   # This is an estimate, the code uses row count
+    total_timesteps: 80000   # Reduced for faster runs on Kaggle
+    learning_rate: 0.00001   # A much smaller learning rate is crucial for fine-tuning
 
 environment:
   initial_balance: 10000
   sequence_length: 150
   commission_pct: 0.0005
   action_penalty: 0.001
-  recent_data_years: 3.0
 
 model:
   features_dim: 256
