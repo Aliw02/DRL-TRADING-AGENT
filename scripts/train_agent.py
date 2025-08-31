@@ -91,7 +91,8 @@ def run_walk_forward_training(full_df_cpu, config: Config):
         test_df_scaled_cpu = pd_cpu.DataFrame(scaler.transform(test_df_cpu_split[feature_cols]), columns=feature_cols, index=test_df_cpu_split.index)
         test_df_scaled_cpu['close'] = test_df_cpu_split['close']
         
-        train_df_processed, test_df_processed = to_gpu(train_df_scaled_cpu), to_gpu(test_df_scaled_cpu)
+        # FIX: Reset the index before converting to GPU DataFrame to ensure a simple integer index
+        train_df_processed, test_df_processed = to_gpu(train_df_scaled_cpu.reset_index(drop=True)), to_gpu(test_df_scaled_cpu.reset_index(drop=True))
 
         train_one_segment(train_df_processed, test_df_processed, split_save_path, config)
         joblib.dump(scaler, split_save_path / "scaler.joblib")
@@ -119,7 +120,9 @@ def find_champion_model(holdout_df_cpu, config: Config):
         feature_cols = [c for c in holdout_df_cpu.columns if c not in ['open', 'high', 'low', 'close', 'time', 'timestamp']]
         holdout_scaled_cpu = pd_cpu.DataFrame(scaler.transform(holdout_df_cpu[feature_cols]), columns=feature_cols, index=holdout_df_cpu.index)
         holdout_scaled_cpu['close'] = holdout_df_cpu['close']
-        holdout_processed = to_gpu(holdout_scaled_cpu)
+        
+        # FIX: Reset the index here as well
+        holdout_processed = to_gpu(holdout_scaled_cpu.reset_index(drop=True))
 
         eval_env = make_vec_env(lambda: TradingEnv(holdout_processed), n_envs=1)
         mean_reward, _ = evaluate_policy(model, eval_env, n_eval_episodes=1, deterministic=True)
@@ -154,7 +157,8 @@ def run_finetuning_for_live_trading(best_model_path, full_df_cpu, config: Config
     final_train_df_cpu = pd_cpu.DataFrame(scaled_features_cpu, columns=feature_cols, index=recent_df_cpu.index)
     final_train_df_cpu['close'] = recent_df_cpu['close']
     
-    final_train_df = to_gpu(final_train_df_cpu)
+    # FIX: Reset the index before converting to GPU DataFrame
+    final_train_df = to_gpu(final_train_df_cpu.reset_index(drop=True))
     
     final_env = make_vec_env(lambda: TradingEnv(final_train_df), n_envs=8)
     
