@@ -1,92 +1,68 @@
-# trading_agent.py (NEW WORKFLOW ORCHESTRATOR)
-
-import os
-import sys
+# main.py (UPDATED - The primary entry point for the entire workflow)
 import argparse
+import sys
+import os
 
-# --- Add project root to the Python path ---
-# This allows us to import modules from other directories like 'scripts' and 'utils'
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(PROJECT_ROOT)
-print(f"Project Root added to sys.path: {PROJECT_ROOT}")
-# --- Import the core functions from our scripts ---
-from scripts.train_agent import run_walk_forward_training, run_finetuning_for_live_trading
-from scripts.analyze_features import analyze_model_features
-from scripts.backtest_agent import run_backtest
+# --- Add project root to path ---
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from utils.logger import setup_logging, get_logger
+from scripts.preprocess_data import run_preprocessing as run_preprocessing
+from scripts.train_regime_model import train_and_analyze_regime_model
+from scripts.create_enriched_dataset import enrich_dataset_with_regimes
+from scripts.train_agent import run_agent_training # This now includes Walk-Forward and Fine-Tuning
+from scripts.backtest_agent import run_backtest
+from config.init import Config
 
-
-def main(skip_training=False):
+def run_full_pipeline(config_path: str):
     """
-    Orchestrates the full, end-to-end workflow for the DRL Trading Agent.
-    It runs the following stages in sequence:
-    1. Full Walk-Forward Training.
-    2. Fine-tuning the best model for live trading.
-    3. Analyzing the final model's feature importance using SHAP.
-    4. Backtesting the final model on unseen data.
+    Orchestrates the entire, end-to-end professional workflow for the DRL agent.
+    This pipeline is robust, interpretable, and follows quantitative finance best practices.
     """
-    # Initialize our structured logging
     setup_logging()
     logger = get_logger(__name__)
+    
+    logger.info("==========================================================")
+    logger.info("🚀 STARTING FULL PROFESSIONAL DRL TRADING AGENT PIPELINE 🚀")
+    logger.info("==========================================================")
 
     try:
-        if not skip_training:
-            # --- STAGE 1: TRAINING ---
-            print("="*80)
-            print("STAGE 1: Starting Walk-Forward Training...")
-            print("This is the longest stage, where the agent learns on expanding windows of data.")
-            print("="*80)
-            run_walk_forward_training()
-            print("✅ STAGE 1: Walk-Forward Training completed successfully.")
+        # --- DATA PREPARATION STAGES ---
+        logger.info("\n--- PIPELINE STEP 1: Initial Feature Engineering ---")
+        run_preprocessing()
 
-            # --- STAGE 2: FINE-TUNING ---
-            print("="*80)
-            print("STAGE 2: Starting Fine-Tuning of the Best Model...")
-            print("The best model from the last split is now trained on the entire dataset.")
-            print("="*80)
-            run_finetuning_for_live_trading()
-            print("✅ STAGE 2: Fine-Tuning completed successfully.")
-        else:
-            print("Skipping Training and Fine-Tuning stages as requested.")
+        logger.info("\n--- PIPELINE STEP 2: Dynamic Market Regime Detection ---")
+        train_and_analyze_regime_model()
 
-        # --- STAGE 3: ANALYSIS ---
-        print("="*80)
-        print("STAGE 3: Analyzing Final Model's Feature Importance...")
-        print("Using SHAP to understand what the model has learned.")
-        print("="*80)
-        analyze_model_features()
-        print("✅ STAGE 3: Feature analysis completed successfully.")
+        logger.info("\n--- PIPELINE STEP 3: Enriching Dataset with Regime Vectors ---")
+        enrich_dataset_with_regimes()
 
-        # --- STAGE 4: BACKTESTING ---
-        print("="*80)
-        print("STAGE 4: Backtesting Final Model on Unseen Data...")
-        print("Simulating the agent's performance on new historical data.")
-        print("="*80)
+        # --- AGENT TRAINING STAGES ---
+        logger.info("\n--- PIPELINE STEP 4: Professional Agent Training ---")
+        # This single function now handles both Walk-Forward Training and Final Fine-Tuning
+        agent_config = Config(config_path=config_path)
+        run_agent_training(config=agent_config)
+
+        # --- VALIDATION STAGE ---
+        logger.info("\n--- PIPELINE STEP 5: Professional Backtesting on Unseen Data ---")
         run_backtest()
-        print("✅ STAGE 4: Backtesting completed successfully.")
+        
+        logger.info("\n==========================================================")
+        logger.info("✅ PIPELINE COMPLETED SUCCESSFULLY! ✅")
+        logger.info("==========================================================")
 
-        print("\n\n" + "*"*30)
-        print(">>> FULL WORKFLOW COMPLETED! <<<")
-        print("*"*30)
-        print("Your agent is trained, analyzed, and backtested. It is ready for live deployment.")
-
-    except FileNotFoundError as e:
-        print(f"A required file was not found: {e}")
-        print("Please ensure your data files and model paths are correct.")
-        print("Workflow terminated prematurely.")
     except Exception as e:
-        print(f"An unexpected error occurred during the workflow: {e}")
-        print("Workflow terminated prematurely.")
+        logger.error(f"A critical error occurred in the pipeline: {e}", exc_info=True)
+        logger.error("Pipeline terminated prematurely.")
 
 if __name__ == "__main__":
-    # We can add a command-line argument to skip the lengthy training process
-    # if we only want to run analysis and backtesting on an existing model.
-    parser = argparse.ArgumentParser(description="Run the full DRL Trading Agent workflow.")
+    parser = argparse.ArgumentParser(description="Run the full professional DRL agent pipeline.")
     parser.add_argument(
-        '--skip-training',
-        action='store_true',
-        help="Skip the training and fine-tuning stages and run analysis/backtesting on existing models."
+        '--config',
+        type=str,
+        default='config/config_sac.yaml',
+        help="Path to the agent's training configuration file (e.g., config/config_sac.yaml)."
     )
     args = parser.parse_args()
     
-    main(skip_training=args.skip_training)
+    run_full_pipeline(config_path=args.config)

@@ -1,33 +1,36 @@
-# trading_agent.py
-from sb3_contrib import RecurrentPPO
+# trading_agent.py (UPDATED for SAC and new paths)
+from stable_baselines3 import SAC
 import os
-
-# تحديد مسار النموذج النهائي
-FINAL_MODEL_PATH = "results/final_model_for_live/finetuned_model.zip"
+from config import paths # Import the centralized paths
 
 def load_trading_model():
     """
-    يقوم بتحميل النموذج الذي تم تدريبه مسبقاً.
+    Loads the final, pre-trained SAC trading model.
     """
     try:
-        if not os.path.exists(FINAL_MODEL_PATH):
-            print(f"Model file not found at: {FINAL_MODEL_PATH}")
+        model_path = str(paths.FINAL_MODEL_PATH)
+        if not os.path.exists(model_path):
+            print(f"ERROR: Model file not found at: {model_path}")
+            print("Please run the main training pipeline first.")
             return None
             
-        model = RecurrentPPO.load(FINAL_MODEL_PATH)
-        print("Model loaded successfully.")
+        # Load the SAC model
+        model = SAC.load(model_path)
+        print("✅ SAC Trading model loaded successfully.")
         return model
     except Exception as e:
-        print(f"Error occurred while loading model: {e}")
+        print(f"An error occurred while loading the model: {e}")
         return None
 
-def get_action_from_model(model, observation, states):
+def get_action_from_model(model, observation):
     """
-    يطلب من النموذج اتخاذ إجراء بناءً على الملاحظة الحالية.
+    Gets a trading action from the model based on the current observation.
+    Note: SAC is not recurrent, so it does not use 'states'.
     """
     try:
-        action, states = model.predict(observation, state=states, deterministic=True)
-        return action, states
+        # Get a deterministic action for live trading
+        action, _ = model.predict(observation, deterministic=True)
+        return action
     except Exception as e:
         print(f"Failed to predict action: {e}")
         return None

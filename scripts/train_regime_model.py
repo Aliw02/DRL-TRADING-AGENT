@@ -33,7 +33,7 @@ def train_and_analyze_regime_model():
 
     try:
         # 1. Load data from the main Parquet file
-        input_path = paths.PROCESSED_DATA_FILE / "processed_training_data.parquet"
+        input_path = paths.PROCESSED_DATA_FILE
         if not input_path.exists():
             raise FileNotFoundError(f"Parquet data not found at {input_path}. Run preprocess_data.py first!")
         

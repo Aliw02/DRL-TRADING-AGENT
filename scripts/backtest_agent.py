@@ -1,234 +1,125 @@
-# backtester.py
+# scripts/backtest_agent.py (FULLY UPGRADED FOR PROFESSIONAL VALIDATION)
+
 import pandas as pd
 import joblib
-import numpy as np
 import os
 import sys
 
-# --- Add project path to access other modules ---
+# --- Add project path to allow imports from other directories ---
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from utils.custom_indicators import calculate_all_indicators
-from stable_baselines3 import PPO # Use PPO for custom feature extractor policies
-from utils.data_transformation import DataTransformer
-from config.init import config
+
+from stable_baselines3 import SAC
+from config import paths
 from envs.trading_env import TradingEnv
+from utils.data_transformation import DataTransformer
+from utils.logger import setup_logging, get_logger
+from utils.metrics import calculate_performance_metrics
 
-# --- Final file paths ---
-FINAL_MODEL_PATH = "results/final_model_for_live/finetuned_model.zip"
-FINAL_SCALER_PATH = "results/final_model_for_live/final_robust_scaler.joblib"
-# Ensure this file exists
-TIMEFRAME = 15
-TEST_DATA_PATH = f"data/XAUUSDM{TIMEFRAME}-TEST_UNSEEN.csv"
-
-# --- NEW BACKTESTER SETTINGS ---
-USE_DYNAMIC_TP = False
-
-# --- NEW FILTER TOGGLES ---
-USE_RSI_FILTER = False
-USE_ADX_FILTER = False
-USE_CE_FLIP_FILTER = False
-
-COMMISSION_PCT = config.get('environment.commission_pct', 0.0005)
-SLIPPAGE_PCT = config.get('environment.slippage_pct', 0.0002)
-
-
-def load_tickstory_data(file_path):
-    """
-    Loads and prepares Tickstory data.
-    Ensures a dedicated 'time' column is present.
-    """
-    column_names = ['date', 'time', 'open', 'high', 'low', 'close', 'tick_volume', 'volume', 'spread']
-    df = pd.read_csv(file_path, sep=',', header=None, names=column_names, dtype={'date': str, 'time': str})
-    
-    # Combine date and time into a single datetime column
-    df['time'] = pd.to_datetime(df['date'] + ' ' + df['time'], format='%Y%m%d %H:%M:%S', errors='coerce')
-    df.drop(columns=['date'], inplace=True)
-    
-    # Ensure a single 'volume' column for downstream processing
-    if 'volume' not in df.columns and 'tick_volume' in df.columns:
-        df.rename(columns={'tick_volume': 'volume'}, inplace=True)
-    elif 'tick_volume' in df.columns and 'volume' in df.columns:
-        df.drop(columns=['tick_volume'], inplace=True)
-    
-    df = df.drop(columns=['spread'], errors='ignore')
-    return df
-
-from config import paths # Import paths
 def run_backtest():
-    print("===== Starting Backtesting Process =====")
+    """
+    Runs a professional backtest by applying the FULL data enrichment pipeline
+    to unseen data before simulating the final agent's performance. This provides
+    a robust, out-of-sample validation of the entire trading system.
+    """
+    setup_logging()
+    logger = get_logger(__name__)
+
+    logger.info("="*80)
+    logger.info("STARTING PROFESSIONAL BACKTESTING PROCESS")
+    logger.info("="*80)
     
     try:
-        # --- Use the centralized paths ---
-        model = PPO.load(str(paths.FINAL_MODEL_PATH)) # Use PPO
-        scaler = joblib.load(str(paths.FINAL_SCALER_PATH))
-        print("Model and Scaler loaded successfully.")
+        # --- 1. Load all necessary production artifacts ---
+        logger.info("Loading production agent, scalers, and regime model...")
+        
+        # Load the final trained trading agent
+        agent_model = SAC.load(str(paths.FINAL_MODEL_PATH))
+        
+        # Load the scaler that was used for the agent's training data
+        agent_scaler = joblib.load(str(paths.FINAL_SCALER_PATH))
+        
+        # Load the unsupervised model for market regime detection
+        regime_model = joblib.load(paths.FINAL_MODEL_DIR / "regime_gmm_model.joblib")
+        
+        # Load the scaler that was used for the regime model's training data
+        regime_scaler = joblib.load(paths.FINAL_MODEL_DIR / "regime_robust_scaler.joblib")
+        
+        logger.info("All production artifacts loaded successfully.")
+
+        # --- 2. Load and apply initial feature engineering to UNSEEN backtest data ---
+        logger.info(f"Loading and processing unseen backtest data from: {paths.BACKTEST_DATA_FILE}")
+        transformer = DataTransformer()
+        backtest_df = transformer.load_and_preprocess_data(file_path=str(paths.BACKTEST_DATA_FILE))
+
+        # --- 3. Enrich the UNSEEN data with market regime probabilities on the fly ---
+        # This step simulates what a live agent would do with new data.
+        logger.info("Enriching unseen data with market regime vectors...")
+        regime_features = ['adx', 'bb_width', 'roc_norm', 'rsi_x_adx', 'atr']
+        
+        # Ensure data is clean before prediction
+        X_raw = backtest_df[regime_features].ffill().bfill()
+        X_scaled = regime_scaler.transform(X_raw)
+        
+        # Get the probability vectors from the GMM
+        regime_probabilities = regime_model.predict_proba(X_scaled)
+        prob_cols = [f'regime_prob_{i}' for i in range(regime_model.n_components)]
+        prob_df = pd.DataFrame(regime_probabilities, index=backtest_df.index, columns=prob_cols)
+        
+        # Merge the new regime features into the backtest dataframe
+        enriched_backtest_df = backtest_df.join(prob_df)
+
+        # --- 4. Scale the final enriched features with the AGENT's specific scaler ---
+        logger.info("Scaling final feature set for the agent...")
+        feature_cols = [col for col in enriched_backtest_df.columns if col not in ['open', 'high', 'low', 'close', 'time', 'timestamp']]
+        scaled_features = agent_scaler.transform(enriched_backtest_df[feature_cols])
+        
+        final_backtest_df = pd.DataFrame(scaled_features, columns=feature_cols, index=enriched_backtest_df.index)
+        final_backtest_df['close'] = enriched_backtest_df['close']
+        
+        logger.info(f"Prepared {len(final_backtest_df)} data points for backtesting.")
+
+        # --- 5. Run the simulation in the professional environment ---
+        backtest_env = TradingEnv(final_backtest_df)
+        obs, _ = backtest_env.reset()
+        done = False
+        equity_curve = [backtest_env.initial_balance]
+        
+        logger.info("Starting simulation loop...")
+        while not done:
+            # Get deterministic action from the trained agent
+            action, _ = agent_model.predict(obs, deterministic=True)
+            obs, _, done, _, info = backtest_env.step(action)
+            equity_curve.append(info['equity'])
+        logger.info("Simulation finished.")
+
+        # --- 6. Calculate and display professional performance metrics ---
+        equity_series = pd.Series(equity_curve)
+        performance_stats = calculate_performance_metrics(equity_series)
+
+        # Save the results for further analysis or plotting
+        equity_series.to_csv(paths.RESULTS_DIR / "final_backtest_equity.csv", index=False)
+        logger.info(f"Backtest equity curve saved to: {paths.RESULTS_DIR / 'final_backtest_equity.csv'}")
+
+        # Print the final, comprehensive report
+        print("\n" + "="*50)
+        print("      PROFESSIONAL BACKTESTING REPORT")
+        print("="*50)
+        print(f"Initial Portfolio Value: ${equity_series.iloc[0]:,.2f}")
+        print(f"Final Portfolio Value:   ${equity_series.iloc[-1]:,.2f}")
+        print(f"Total Return:            {((equity_series.iloc[-1] / equity_series.iloc[0]) - 1) * 100:.2f}%")
+        print("-"*50)
+        print("RISK-ADJUSTED METRICS:")
+        print(f"Annualized Sharpe Ratio: {performance_stats['sharpe_ratio']:.2f}")
+        print(f"Annualized Sortino Ratio: {performance_stats['sortino_ratio']:.2f}")
+        print(f"Calmar Ratio:            {performance_stats['calmar_ratio']:.2f}")
+        print(f"Maximum Drawdown:        {performance_stats['max_drawdown'] * 100:.2f}%")
+        print("="*50)
+
     except FileNotFoundError as e:
-        print(f"Error: Model or Scaler files not found. {e}")
-        return
-
-    test_df = load_tickstory_data(file_path=str(paths.BACKTEST_DATA_FILE))
-    test_df = calculate_all_indicators(test_df) # Calculate all indicators on the test data
-
-    # --- THE FIX: SEPARATING DATA FOR MODEL AND FOR LOGIC ---
-    # The list of features the model was trained on
-    model_feature_cols = ['direction', 'bullish_flip', 'bearish_flip', 'dist_to_stop', 'rsi']
-
-    # DataFrame for the model's observations (only the features it was trained on)
-    obs_df_scaled = pd.DataFrame(scaler.transform(test_df[model_feature_cols]), columns=model_feature_cols)
-
-    # DataFrame for the backtesting logic (all other columns)
-    logic_df = test_df.copy()
-    
-    # Add 'close' and 'time' columns to obs_df_scaled for TradingEnv
-    obs_df_scaled['close'] = logic_df['close'].values
-    obs_df_scaled['time'] = logic_df['time'].values
-
-    print(f"Loaded {len(obs_df_scaled)} data points for testing.")
-
-    backtest_env = TradingEnv(obs_df_scaled, initial_balance=1000)
-    obs, _ = backtest_env.reset()
-    
-    states = None
-    done = False
-    
-    equity_curve = []
-    trade_history = []
-    initial_balance = backtest_env.initial_balance
-
-    open_position_type = None
-    open_position_entry_time = None
-    open_position_entry_price = 0
-    
-    print("Starting simulation...")
-    while not done:
-        current_step = backtest_env.current_step
-        
-        action, states = model.predict(obs, state=states, deterministic=True)
-        current_time = logic_df.iloc[current_step]['time']
-        current_price = logic_df.iloc[current_step]['close']
-        
-        # --- NEW ENTRY LOGIC (Filtering the DRL model's action) ---
-        can_trade = True
-        # Check if enough data for indicators
-        if current_step >= 50:
-            current_adx = logic_df.iloc[current_step]['adx']
-            current_rsi = logic_df.iloc[current_step]['rsi']
-            current_bullish_flip = logic_df.iloc[current_step]['bullish_flip']
-            current_bearish_flip = logic_df.iloc[current_step]['bearish_flip']
-
-            # --- APPLY FILTERS BASED ON TOGGLES ---
-            if USE_ADX_FILTER and current_adx < 25:
-                can_trade = False
-            
-            if USE_RSI_FILTER:
-                if (action == 1 and current_rsi < 50) or (action == 2 and current_rsi > 50):
-                    can_trade = False
-
-            if USE_CE_FLIP_FILTER:
-                if (action == 1 and current_bullish_flip != 1) or (action == 2 and current_bearish_flip != 1):
-                    can_trade = False
-        else:
-            can_trade = False # Not enough data for indicators at the start
-
-        # --- TRADE MANAGEMENT LOGIC ---
-        if open_position_type is None and can_trade:
-            if action == 1:
-                open_position_type = 'buy'
-                open_position_entry_time = current_time
-                open_position_entry_price = current_price * (1 + SLIPPAGE_PCT)
-            elif action == 2:
-                open_position_type = 'sell'
-                open_position_entry_time = current_time
-                open_position_entry_price = current_price * (1 - SLIPPAGE_PCT)
-        
-        # --- CLOSE LOGIC (Dynamic TP/SL or manual close) ---
-        if open_position_type:
-            close_trade = False
-            
-            # Get dynamic indicators for exit
-            current_bullish_flip = logic_df.iloc[current_step]['bullish_flip']
-            current_bearish_flip = logic_df.iloc[current_step]['bearish_flip']
-            ce_ground_line = logic_df.iloc[current_step]['ce_ground']
-            ce_roof_line = logic_df.iloc[current_step]['ce_roof']
-
-            if USE_DYNAMIC_TP:
-                if open_position_type == 'buy':
-                    if current_price < ce_ground_line: # Hit dynamic SL
-                        close_trade = True
-                    elif current_bearish_flip == 1: # Hit dynamic TP
-                        close_trade = True
-                elif open_position_type == 'sell':
-                    if current_price > ce_roof_line: # Hit dynamic SL
-                        close_trade = True
-                    elif current_bullish_flip == 1: # Hit dynamic TP
-                        close_trade = True
-            else: # Manual close logic (e.g., based on DRL action)
-                if open_position_type == 'buy' and action == 2:
-                    close_trade = True
-                elif open_position_type == 'sell' and action == 1:
-                    close_trade = True
-            
-            if close_trade:
-                if open_position_type == 'buy':
-                    profit_loss = (current_price - open_position_entry_price) * (1 - COMMISSION_PCT)
-                else: # 'sell'
-                    profit_loss = (open_position_entry_price - current_price) * (1 - COMMISSION_PCT)
-                
-                trade_history.append({
-                    'entry_time': open_position_entry_time,
-                    'exit_time': current_time,
-                    'profit_loss': profit_loss,
-                    'type': 'buy_closed' if open_position_type == 'buy' else 'sell_closed'
-                })
-                open_position_type = None
-                open_position_entry_time = None
-                open_position_entry_price = 0
-                
-        obs, reward, done, _, info = backtest_env.step(action)
-        
-        current_equity = initial_balance + sum(t['profit_loss'] for t in trade_history)
-        
-        equity_curve.append({
-            'timestamp': current_time,
-            'equity': current_equity
-        })
-        
-    # Final PnL for any open trade
-    if open_position_type:
-        current_price = logic_df.iloc[backtest_env.current_step - 1]['close']
-        if open_position_type == 'buy':
-            profit_loss = (current_price - open_position_entry_price) * (1 - COMMISSION_PCT)
-        else:
-            profit_loss = (open_position_entry_price - current_price) * (1 - COMMISSION_PCT)
-            
-        current_equity += profit_loss
-        
-        trade_history.append({
-            'entry_time': open_position_entry_time,
-            'exit_time': current_time,
-            'profit_loss': profit_loss,
-            'type': 'buy_closed' if open_position_type == 'buy' else 'sell_closed'
-        })
-        
-        equity_curve.append({
-            'timestamp': current_time,
-            'equity': current_equity
-        })
-        
-    # 4. Save results
-    equity_df = pd.DataFrame(equity_curve)
-    trade_df = pd.DataFrame(trade_history)
-
-    equity_df.to_csv("results/backtest_equity.csv", index=False)
-    trade_df.to_csv("results/backtest_trades.csv", index=False)
-    
-    print("===== Backtesting Completed =====")
-    final_equity = initial_balance + trade_df['profit_loss'].sum()
-    print(f"Final Equity: {final_equity:.2f}")
-    print(f"Net Profit: {trade_df['profit_loss'].sum():.2f}")
-    print(f"Total Trades: {len(trade_df)}")
-    
-    return equity_df, trade_df
+        logger.error(f"A required file was not found: {e}")
+        logger.error("Please ensure the full training pipeline has been run successfully before backtesting.")
+    except Exception as e:
+        logger.error(f"An error occurred during backtesting: {e}", exc_info=True)
 
 if __name__ == "__main__":
     run_backtest()
