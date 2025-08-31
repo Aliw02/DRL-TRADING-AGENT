@@ -1,14 +1,21 @@
-# scripts/train_agent.py (MODIFIED FOR PARALLEL ENVIRONMENTS)
-import os, sys, pandas as pd, joblib, torch
+# scripts/train_agent.py (FINAL DYNAMIC & OPTIMIZED VERSION)
+import os
+import sys
+import joblib
+import torch
+import numpy as np
+import pandas as pd_cpu  # Use an alias for the CPU version of pandas
+
+from utils.accelerator import pd, to_gpu, DEVICE
 from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.evaluation import evaluate_policy
 from sklearn.preprocessing import RobustScaler
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.logger import setup_logging, get_logger
+from utils.logger import setup_logging
 from envs.trading_env import TradingEnv
 from models.custom_policy import CustomActorCriticPolicy
 from config.init import Config
@@ -16,28 +23,21 @@ from config import paths
 
 logger = setup_logging()
 
-def train_one_segment(train_df: pd.DataFrame, eval_df: pd.DataFrame, save_path_prefix: str, config: Config):
-    """Trains a single SAC model segment for the walk-forward process."""
+# (The train_one_segment function remains the same as the previous version)
+def train_one_segment(train_df, eval_df, save_path_prefix: str, config: Config):
     log_dir = save_path_prefix / "logs/"
     model_save_path = save_path_prefix / "models/"
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_save_path, exist_ok=True)
 
-    # --- MODIFICATION: Create 8 parallel environments for training ---
-    # We create a lambda function to pass arguments to the environment constructor
-    train_env_lambda = lambda: TradingEnv(train_df)
-    train_env = make_vec_env(train_env_lambda, n_envs=8) # Using 8 environments
-
-    # Evaluation environment should remain single for consistency
-    eval_env = Monitor(TradingEnv(eval_df), str(log_dir) + "_eval")
+    train_env = make_vec_env(lambda: TradingEnv(train_df), n_envs=8)
+    eval_env = make_vec_env(lambda: TradingEnv(eval_df), n_envs=1)
 
     eval_callback = EvalCallback(eval_env, best_model_save_path=str(model_save_path),
                                  log_path=str(log_dir), eval_freq=10000, deterministic=True)
 
-
     policy_kwargs = dict(features_extractor_class=CustomActorCriticPolicy,
                        features_extractor_kwargs=dict(features_dim=config.get('model.features_dim')))
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     
     model = SAC("MlpPolicy", train_env, policy_kwargs=policy_kwargs, verbose=0,
                 learning_rate=config.get('training.learning_rate'),
@@ -46,26 +46,28 @@ def train_one_segment(train_df: pd.DataFrame, eval_df: pd.DataFrame, save_path_p
                 tau=config.get('training.tau'), gamma=config.get('training.gamma'),
                 train_freq=tuple(config.get('training.train_freq')),
                 learning_starts=config.get('training.learning_starts'),
-                tensorboard_log=str(log_dir), device=device)
+                tensorboard_log=str(log_dir), device="cuda")
 
     total_timesteps = config.get('training.walk_forward.timesteps_per_split')
-    logger.info(f"Training segment for {total_timesteps} timesteps...")
+    logger.info(f"🚀 Starting training for {total_timesteps} timesteps on {train_env.num_envs} parallel environments...")
     model.learn(total_timesteps=total_timesteps, callback=eval_callback)
-    logger.info(f"Segment training complete. Best model saved in {model_save_path}")
+    logger.info(f"✅ Segment training complete. Best model saved in {model_save_path}")
 
-def run_walk_forward_training(full_df: pd.DataFrame, config: Config):
-    """Manages the entire walk-forward training process."""
+def run_walk_forward_training(full_df_cpu, config: Config):
     logger.info("="*80); logger.info("STARTING WALK-FORWARD TRAINING PROCESS"); logger.info("="*80)
     
     wf_config = config.get('training.walk_forward')
-    n_splits = wf_config.get('n_splits')
-    min_train_size = wf_config.get('min_train_size')
-    test_size = wf_config.get('test_size')
+    n_splits, min_train_size, test_size = wf_config['n_splits'], wf_config['min_train_size'], wf_config['test_size']
     
+    # NEW: Define a final hold-out set for champion selection
+    holdout_size = test_size
+    training_data_end = len(full_df_cpu) - holdout_size
+    training_df_cpu = full_df_cpu.iloc[:training_data_end]
+    holdout_df_cpu = full_df_cpu.iloc[training_data_end:]
+
     for i in range(n_splits):
         split_num = i + 1
         logger.info(f"\n===== Processing Walk-Forward Split {split_num}/{n_splits} =====")
-        
         split_save_path = paths.WALK_FORWARD_DIR / f"split_{split_num}"
         if (split_save_path / "models/best_model.zip").exists():
             logger.info(f"Split {split_num} already trained. Skipping.")
@@ -73,82 +75,115 @@ def run_walk_forward_training(full_df: pd.DataFrame, config: Config):
 
         train_end = min_train_size + i * test_size
         test_end = train_end + test_size
-        if test_end > len(full_df):
+
+        if test_end > len(training_df_cpu):
             logger.warning(f"Not enough data for split {split_num}. Stopping walk-forward.")
             break
-            
-        train_df_unscaled = full_df.iloc[:train_end].copy()
-        test_df_unscaled = full_df.iloc[train_end:test_end].copy()
+        
+        train_df_cpu_split, test_df_cpu_split = training_df_cpu.iloc[:train_end], training_df_cpu.iloc[train_end:test_end]
         
         scaler = RobustScaler()
-        feature_cols = [c for c in full_df.columns if c not in ['open', 'high', 'low', 'close', 'time', 'timestamp']]
+        feature_cols = [c for c in training_df_cpu.columns if c not in ['open', 'high', 'low', 'close', 'time', 'timestamp']]
         
-        train_df_scaled = pd.DataFrame(scaler.fit_transform(train_df_unscaled[feature_cols]), columns=feature_cols, index=train_df_unscaled.index)
-        train_df_scaled['close'] = train_df_unscaled['close']
+        train_df_scaled_cpu = pd_cpu.DataFrame(scaler.fit_transform(train_df_cpu_split[feature_cols]), columns=feature_cols, index=train_df_cpu_split.index)
+        train_df_scaled_cpu['close'] = train_df_cpu_split['close']
         
-        test_df_scaled = pd.DataFrame(scaler.transform(test_df_unscaled[feature_cols]), columns=feature_cols, index=test_df_unscaled.index)
-        test_df_scaled['close'] = test_df_unscaled['close']
+        test_df_scaled_cpu = pd_cpu.DataFrame(scaler.transform(test_df_cpu_split[feature_cols]), columns=feature_cols, index=test_df_cpu_split.index)
+        test_df_scaled_cpu['close'] = test_df_cpu_split['close']
+        
+        train_df_processed, test_df_processed = to_gpu(train_df_scaled_cpu), to_gpu(test_df_scaled_cpu)
 
-        train_one_segment(train_df_scaled, test_df_scaled, split_save_path, config)
+        train_one_segment(train_df_processed, test_df_processed, split_save_path, config)
         joblib.dump(scaler, split_save_path / "scaler.joblib")
     
     logger.info("="*80); logger.info("Walk-Forward Training Process Completed"); logger.info("="*80)
+    return holdout_df_cpu # Return the holdout set for the next step
 
-def run_finetuning_for_live_trading(full_df, config: Config):
-    """Finds the best model from the last split and fine-tunes it on recent data."""
+def find_champion_model(holdout_df_cpu, config: Config):
+    """Evaluates all split models on a holdout set to find the best one."""
+    logger.info("="*80); logger.info("FINDING CHAMPION MODEL FROM ALL SPLITS"); logger.info("="*80)
+    best_model_path = None
+    best_reward = -np.inf
+    n_splits = config.get('training.walk_forward.n_splits')
+
+    for i in range(1, n_splits + 1):
+        model_path = paths.WALK_FORWARD_DIR / f"split_{i}/models/best_model.zip"
+        scaler_path = paths.WALK_FORWARD_DIR / f"split_{i}/scaler.joblib"
+        if not model_path.exists():
+            continue
+
+        logger.info(f"Evaluating model from split {i}...")
+        model = SAC.load(model_path)
+        scaler = joblib.load(scaler_path)
+
+        feature_cols = [c for c in holdout_df_cpu.columns if c not in ['open', 'high', 'low', 'close', 'time', 'timestamp']]
+        holdout_scaled_cpu = pd_cpu.DataFrame(scaler.transform(holdout_df_cpu[feature_cols]), columns=feature_cols, index=holdout_df_cpu.index)
+        holdout_scaled_cpu['close'] = holdout_df_cpu['close']
+        holdout_processed = to_gpu(holdout_scaled_cpu)
+
+        eval_env = make_vec_env(lambda: TradingEnv(holdout_processed), n_envs=1)
+        mean_reward, _ = evaluate_policy(model, eval_env, n_eval_episodes=1, deterministic=True)
+        logger.info(f"Split {i} model reward on holdout set: {mean_reward}")
+
+        if mean_reward > best_reward:
+            best_reward = mean_reward
+            best_model_path = model_path
+            logger.info(f"🏆 New champion found! Split {i} is the best so far.")
+
+    if best_model_path is None:
+        raise FileNotFoundError("Could not find any trained models to evaluate.")
+    
+    return best_model_path
+
+def run_finetuning_for_live_trading(best_model_path, full_df_cpu, config: Config):
+    """Finds the best model and fine-tunes it on recent data."""
     logger.info("="*80); logger.info("STARTING FINE-TUNING PROCESS FOR PRODUCTION MODEL"); logger.info("="*80)
     
     ft_config = config.get('training.fine_tuning')
-    n_splits = config.get('training.walk_forward.n_splits')
     
-    # Find the last successfully trained split
-    last_trained_split = 0
-    for i in range(n_splits, 0, -1):
-        if (paths.WALK_FORWARD_DIR / f"split_{i}/models/best_model.zip").exists():
-            last_trained_split = i
-            break
-            
-    if last_trained_split == 0:
-        raise FileNotFoundError("No trained models found from walk-forward splits. Cannot fine-tune.")
-
-    logger.info(f"Found best model from last completed split: split_{last_trained_split}")
-    best_model_path = paths.WALK_FORWARD_DIR / f"split_{last_trained_split}/models/best_model.zip"
+    logger.info(f"Loading champion model from: {best_model_path}")
     
-    # Prepare recent data for fine-tuning
-    recent_data_rows = ft_config.get('recent_data_years') * 252 * 24 * 60 # Approx rows in N years of M1 data
-    recent_df = full_df.tail(int(recent_data_rows)).copy()
-    logger.info(f"Using last {len(recent_df)} records (approx. {ft_config.get('recent_data_years')} years) for fine-tuning.")
+    recent_data_rows = ft_config.get('recent_data_years') * 252 * 24 * 60
+    recent_df_cpu = full_df_cpu.tail(int(recent_data_rows))
     
-    # Scale recent data with a new, final scaler
     final_scaler = RobustScaler()
-    feature_cols = [c for c in recent_df.columns if c not in ['open', 'high', 'low', 'close', 'time', 'timestamp']]
-    scaled_features = final_scaler.fit_transform(recent_df[feature_cols])
-    final_train_df = pd.DataFrame(scaled_features, columns=feature_cols, index=recent_df.index)
-    final_train_df['close'] = recent_df['close']
+    feature_cols = [c for c in recent_df_cpu.columns if c not in ['open', 'high', 'low', 'close', 'time', 'timestamp']]
+    scaled_features_cpu = final_scaler.fit_transform(recent_df_cpu[feature_cols])
     
-    # Load the best model and fine-tune it
-    final_env = Monitor(TradingEnv(final_train_df))
-    model = SAC.load(best_model_path, env=final_env, device="cuda" if torch.cuda.is_available() else "cpu")
+    # We must use the CPU version of pandas here as it was imported with an alias
+    final_train_df_cpu = pd_cpu.DataFrame(scaled_features_cpu, columns=feature_cols, index=recent_df_cpu.index)
+    final_train_df_cpu['close'] = recent_df_cpu['close']
+    
+    final_train_df = to_gpu(final_train_df_cpu)
+    
+    final_env = make_vec_env(lambda: TradingEnv(final_train_df), n_envs=8)
+    
+    # --- DYNAMIC DEVICE SELECTION ---
+    # The device is now set dynamically based on GPU availability.
+    model = SAC.load(best_model_path, env=final_env, device=DEVICE)
+    
+    # The learning rate is already set to a low value from the config file.
     model.learning_rate = ft_config.get('learning_rate')
     
-    logger.info(f"Starting fine-tuning for {ft_config.get('total_timesteps')} timesteps with learning rate {model.learning_rate}...")
+    logger.info(f"Starting fine-tuning for {ft_config.get('total_timesteps')} timesteps with learning rate {model.learning_rate} on device '{DEVICE}'...")
     model.learn(total_timesteps=ft_config.get('total_timesteps'), reset_num_timesteps=False)
     
-    # Save the final production-ready artifacts
     model.save(paths.FINAL_MODEL_PATH)
     joblib.dump(final_scaler, paths.FINAL_SCALER_PATH)
     
     logger.info(f"✅ Fine-tuning complete. Production model saved to: {paths.FINAL_MODEL_PATH}")
     logger.info(f"Production scaler saved to: {paths.FINAL_SCALER_PATH}"); logger.info("="*80)
 
+
 def run_agent_training(config: Config):
-    """The main entry point that runs the full training and fine-tuning pipeline."""
     data_path = paths.FINAL_ENRICHED_DATA_FILE
-    if not data_path.exists():
-        raise FileNotFoundError("Enriched data file not found. Run the main pipeline.")
+    full_df_cpu = pd_cpu.read_parquet(data_path)
     
-    full_df = pd.read_parquet(data_path)
+    # Stage 1: Run walk-forward training and get the holdout set
+    holdout_df = run_walk_forward_training(full_df_cpu, config)
     
-    # Run the two main stages
-    run_walk_forward_training(full_df, config)
-    run_finetuning_for_live_trading(full_df, config)
+    # Stage 2: Find the champion model from all splits
+    champion_model_path = find_champion_model(holdout_df, config)
+
+    # Stage 3: Fine-tune the champion model for production
+    run_finetuning_for_live_trading(champion_model_path, full_df_cpu, config)
