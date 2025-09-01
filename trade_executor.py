@@ -1,5 +1,6 @@
-# trade_executor.py (Updated)
+# trade_executor.py (Updated for continuous action)
 import MetaTrader5 as mt5
+import numpy as np
 
 def get_open_position(symbol):
     """
@@ -38,19 +39,29 @@ def close_position(position):
         print("Position closed successfully.")
     return result
 
-def execute_trade(symbol, action, lot_size=0.01):
+def execute_trade(symbol, action: float, lot_size=0.01):
     """
-    Executes a buy, sell, or close trade based on the model's action and the current open position.
+    Executes a buy, sell, or hold action based on the model's continuous action.
+    - action > 0.5: BUY
+    - action < -0.5: SELL
+    - -0.5 < action < 0.5: HOLD
     """
+    # Convert continuous action to discrete
+    discrete_action = 0
+    if action > 0.5:
+        discrete_action = 1 # BUY
+    elif action < -0.5:
+        discrete_action = 2 # SELL
+    
     open_position = get_open_position(symbol)
 
     if open_position:
         # If there's an open position, check if the action is to close it
-        if open_position.type == mt5.ORDER_TYPE_BUY and action == 2: # Model recommends SELL
+        if open_position.type == mt5.ORDER_TYPE_BUY and discrete_action == 2: # Model recommends SELL
             print("Model recommends SELL. Closing open BUY position.")
             close_position(open_position)
             return None
-        elif open_position.type == mt5.ORDER_TYPE_SELL and action == 1: # Model recommends BUY
+        elif open_position.type == mt5.ORDER_TYPE_SELL and discrete_action == 1: # Model recommends BUY
             print("Model recommends BUY. Closing open SELL position.")
             close_position(open_position)
             return None
@@ -59,10 +70,10 @@ def execute_trade(symbol, action, lot_size=0.01):
             return None
     else:
         # If no open position, check if the action is to open a new one
-        if action == 1:  # Buy
+        if discrete_action == 1:  # Buy
             order_type = mt5.ORDER_TYPE_BUY
             print("Model recommends BUY. Opening new position.")
-        elif action == 2:  # Sell
+        elif discrete_action == 2:  # Sell
             order_type = mt5.ORDER_TYPE_SELL
             print("Model recommends SELL. Opening new position.")
         else: # Hold

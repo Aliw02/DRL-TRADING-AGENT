@@ -71,8 +71,9 @@ class DataTransformer:
             df_with_features = calculate_all_indicators(df)
             logger.info("--> STEP 1.4: All features calculated.")
 
-            # --- Final Cleanup Logic ---
-            processed_df = df_with_features.copy()
+            # --- Final Cleanup Logic (NO .copy()) ---
+            # FIX: Removed the .copy() to prevent memory allocation error
+            processed_df = df_with_features
             logger.info(f"Data shape before final cleanup: {processed_df.shape}")
 
             # Drop any column that is entirely empty

@@ -5,10 +5,10 @@ import os
 
 # --- Define Kaggle-specific directories ---
 # The root directory for all outputs is the writable /kaggle/working/ directory
-ROOT_DIR = Path('/kaggle/working/DRL-TRADING-AGENT').resolve()
+ROOT_DIR = Path(__name__).parent.parent.resolve()
 
 # The data directory points to the read-only /kaggle/input/ directory
-DATA_DIR = Path(f'/kaggle/input/ai-model-agent-ds').resolve()
+DATA_DIR = ROOT_DIR / "data"
 
 print(f"Kaggle Root (Writable): {ROOT_DIR}")
 print(f"Kaggle Data (Read-Only): {DATA_DIR}")

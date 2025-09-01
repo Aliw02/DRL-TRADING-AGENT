@@ -1,4 +1,5 @@
 # mt5_connector.py
+# mt5_connector.py (No major changes, just ensure it can handle larger requests)
 import MetaTrader5 as mt5
 import pandas as pd
 from datetime import datetime
@@ -23,7 +24,7 @@ def connect_mt5(login, password, server):
 
 def get_mt5_data(symbol, timeframe, num_bars):
     """
-    يحصل على البيانات التاريخية من MT5.
+    يحصل على البيانات التاريخية من MT5 ويقوم بتوحيد اسم عمود الحجم.
     """
     try:
         rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, num_bars)
@@ -32,8 +33,23 @@ def get_mt5_data(symbol, timeframe, num_bars):
             return None
         
         df = pd.DataFrame(rates)
-        df['time'] = pd.to_datetime(df['time'], unit='s')
-        return df
+        
+        # --- هذا هو السطر الذي يحل المشكلة ---
+        # MT5 provides 'tick_volume'. We rename it to 'volume' to match the
+        # column name used throughout the entire training pipeline.
+        if 'tick_volume' in df.columns:
+            df.rename(columns={'tick_volume': 'volume'}, inplace=True)
+        else:
+            # As a fallback, create a volume column of zeros if not present
+            df['volume'] = 0
+            
+        # The 'time' column is essential for resampling
+        df['timestamp'] = pd.to_datetime(df['time'], unit='s')
+        df.set_index('timestamp', inplace=True)
+        
+        # We only need the OHLCV columns for our model
+        return df[['open', 'high', 'low', 'close', 'volume']]
+        
     except Exception as e:
         print(f"Error occurred while fetching data: {e}")
         return None

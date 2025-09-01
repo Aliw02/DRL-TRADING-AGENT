@@ -11,10 +11,13 @@ import matplotlib.pyplot as plt
 # --- Add project root to path ---
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
+from models.custom_policy import CustomActorCriticPolicy
+from utils.accelerator import DEVICE
 from stable_baselines3 import SAC
 from sklearn.inspection import permutation_importance
 from utils.data_transformation import DataTransformer
 from utils.logger import setup_logging, get_logger
+from config.init import config
 from config import paths
 
 def analyze_model_features():
@@ -29,11 +32,23 @@ def analyze_model_features():
     logger.info("="*80)
     logger.info("STARTING ADVANCED FEATURE ANALYSIS PROCESS")
     logger.info("="*80)
-    
+     
     try:
         # --- 1. Load all production artifacts ---
         logger.info("Loading production agent, scalers, and regime model...")
-        agent_model = SAC.load(str(paths.FINAL_MODEL_PATH), device='cpu') # Load to CPU for analysis
+        policy_kwargs = dict(
+            features_extractor_class=CustomActorCriticPolicy,
+            features_extractor_kwargs=dict(features_dim=config.get('model.features_dim')),
+            # This line is added to match the saved model's parameters EXACTLY.
+            use_sde=False 
+        )
+
+        agent_model = SAC.load(
+            str(paths.FINAL_MODEL_PATH),
+            device=DEVICE,
+            buffer_size=0,
+            policy_kwargs=policy_kwargs
+        )
         agent_scaler = joblib.load(str(paths.FINAL_SCALER_PATH))
         regime_model = joblib.load(paths.FINAL_MODEL_DIR / "regime_gmm_model.joblib")
         regime_scaler = joblib.load(paths.FINAL_MODEL_DIR / "regime_robust_scaler.joblib")
@@ -41,7 +56,7 @@ def analyze_model_features():
         # --- 2. Prepare unseen data using the full enrichment pipeline ---
         logger.info(f"Loading and processing unseen data from: {paths.BACKTEST_DATA_FILE}")
         transformer = DataTransformer()
-        backtest_df = transformer.load_and_preprocess_data(file_path=str(paths.BACKTEST_DATA_FILE))
+        backtest_df = transformer.load_and_preprocess_data(file_path=str(paths.BACKTEST_DATA_FILE), timeframe='15min')
 
         regime_features = ['adx', 'bb_width', 'roc_norm', 'rsi_x_adx', 'atr']
         X_raw_regime = backtest_df[regime_features].ffill().bfill()

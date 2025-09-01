@@ -46,7 +46,7 @@ def train_one_segment(train_df, eval_df, save_path_prefix: str, config: Config):
                 tau=config.get('training.tau'), gamma=config.get('training.gamma'),
                 train_freq=tuple(config.get('training.train_freq')),
                 learning_starts=config.get('training.learning_starts'),
-                tensorboard_log=str(log_dir), device="cuda")
+                tensorboard_log=str(log_dir), device="cuda", use_sde=True)
 
     total_timesteps = config.get('training.walk_forward.timesteps_per_split')
     logger.info(f"🚀 Starting training for {total_timesteps} timesteps on {train_env.num_envs} parallel environments...")
@@ -190,4 +190,22 @@ def run_agent_training(config: Config):
     champion_model_path = find_champion_model(holdout_df, config)
 
     # Stage 3: Fine-tune the champion model for production
+    run_finetuning_for_live_trading(champion_model_path, full_df_cpu, config)
+
+
+
+def run_agent_finetuning(config: Config):
+    # This is the new logic to find the best model from the pre-trained splits
+    # and then fine-tune it, skipping the main training loop.
+    data_path = paths.FINAL_ENRICHED_DATA_FILE
+    full_df_cpu = pd_cpu.read_parquet(data_path)
+    
+    # Define a final hold-out set for champion selection
+    holdout_size = config.get('training.walk_forward.test_size')
+    holdout_df_cpu = full_df_cpu.iloc[len(full_df_cpu) - holdout_size:]
+
+    # Stage 1: Find the champion model from all splits (pre-trained)
+    champion_model_path = find_champion_model(holdout_df_cpu, config)
+
+    # Stage 2: Fine-tune the champion model for production
     run_finetuning_for_live_trading(champion_model_path, full_df_cpu, config)
