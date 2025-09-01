@@ -126,7 +126,7 @@ def find_champion_model(holdout_df_cpu, config: Config):
 
         eval_env = make_vec_env(lambda: TradingEnv(holdout_processed), n_envs=1)
         mean_reward, _ = evaluate_policy(model, eval_env, n_eval_episodes=1, deterministic=True)
-        logger.info(f"Split {i} model reward on holdout set: {mean_reward}")
+        logger.info(f"Split 1 model reward on holdout set: {mean_reward}")
 
         if mean_reward > best_reward:
             best_reward = mean_reward
