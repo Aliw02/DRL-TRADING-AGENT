@@ -1,3 +1,5 @@
+
+# %%writefile envs/trading_env.py
 # envs/trading_env.py (FINAL ACCELERATED VERSION)
 import gymnasium as gym
 from gymnasium import spaces
@@ -45,7 +47,13 @@ class TradingEnv(gym.Env):
         self.position_size = 0.0
         self.units_held = 0.0
         self.portfolio_return_history = [0.0] * self.sequence_length 
-        return self._next_observation(), {}
+        
+        # Explicitly convert the cupy array to numpy array on reset
+        obs = self._next_observation()
+        if IS_GPU_AVAILABLE:
+            obs = np.asnumpy(obs)
+            
+        return obs, {}
     
     def step(self, action):
         target_position_size = float(action[0])
@@ -66,6 +74,7 @@ class TradingEnv(gym.Env):
         obs = self._next_observation()
         info = {'equity': self.portfolio_value, 'position_size': self.position_size}
         
+        # FIX: Explicitly convert cupy array to numpy array before returning
         if IS_GPU_AVAILABLE:
             obs = np.asnumpy(obs)
             
