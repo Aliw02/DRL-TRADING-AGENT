@@ -130,7 +130,7 @@ def run_backtest():
             observation = np.expand_dims(np.concatenate([obs_features, position_feature], axis=1), axis=0)
             action_continuous, _ = agent_model.predict(observation, deterministic=True)
             action_value = action_continuous[0][0]
-            logger.info(f"Bar {i}: Action Value = {action_value}")
+            # logger.info(f"Bar {i}: Action Value = {action_value}")
             # --- STEP 2: MANAGE any open position using the latest market data and model signal ---
             if open_position:
                 close_price = 0
@@ -202,7 +202,7 @@ def run_backtest():
                     atr_at_entry = current_bar['atr']
                     stop_loss = entry_price - (atr_at_entry * ATR_SL_MUL)
                     take_profit = entry_price + (atr_at_entry * ATR_TP_MUL)
-                    logger.info(f"Action value: {action_value}, Entry Price: {entry_price}, Stop Loss: {stop_loss}, Take Profit: {take_profit}")
+                    # logger.info(f"Action value: {action_value}, Entry Price: {entry_price}, Stop Loss: {stop_loss}, Take Profit: {take_profit}")
                     # **Store the calculated lot size with the position**
                     open_position = {'type': 'BUY', 'lot_size': current_lot_size, 'entry_price': entry_price, 'entry_time': current_bar['timestamp'], 'stop_loss': stop_loss, 'take_profit': take_profit}
                 
@@ -211,7 +211,7 @@ def run_backtest():
                     atr_at_entry = current_bar['atr']
                     stop_loss = entry_price + (atr_at_entry * ATR_SL_MUL)
                     take_profit = entry_price - (atr_at_entry * ATR_TP_MUL)
-                    logger.info(f"Action value: {action_value}, Entry Price: {entry_price}, Stop Loss: {stop_loss}, Take Profit: {take_profit}")
+                    # logger.info(f"Action value: {action_value}, Entry Price: {entry_price}, Stop Loss: {stop_loss}, Take Profit: {take_profit}")
                     # **Store the calculated lot size with the position**
                     open_position = {'type': 'SELL', 'lot_size': current_lot_size, 'entry_price': entry_price, 'entry_time': current_bar['timestamp'], 'stop_loss': stop_loss, 'take_profit': take_profit}
 

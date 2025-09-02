@@ -21,7 +21,7 @@ training:
   # after resampling to a 15-minute timeframe.
   walk_forward:
     n_splits: 5
-    min_train_size: 150000   # Start with 150k bars (more realistic)
+    min_train_size: 120000   # Start with 150k bars (more realistic)
     test_size: 30000     # Use 30k bars for validation in each split
     timesteps_per_split: 150000 # Training duration for each split
 

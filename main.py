@@ -11,6 +11,7 @@ from scripts.create_enriched_dataset import enrich_dataset_with_regimes
 from scripts.train_agent import run_agent_training, run_agent_finetuning
 from scripts.analyze_features import analyze_model_features
 from scripts.backtest_agent import run_backtest
+from scripts.plot_results import Plotter
 from config.init import Config
 
 def run_full_pipeline(config_path: str):
@@ -31,24 +32,29 @@ def run_full_pipeline(config_path: str):
         # enrich_dataset_with_regimes()
 
         logger.info("\\n--- PIPELINE STEP 4: Professional Agent Training ---")
-        run_full_training = True # Set to False to skip initial training and only do fine-tuning
-        if not run_full_training:
-            logger.info("⚠️ Skipping initial training, proceeding to fine-tuning only.")
-            agent_config = Config(config_path=config_path)
-            run_agent_finetuning(config=agent_config)
-        else:
-            agent_config = Config(config_path=config_path)
-            run_agent_training(config=agent_config)
+        # run_full_training = True # Set to False to skip initial training and only do fine-tuning
+        # if not run_full_training:
+        #     logger.info("⚠️ Skipping initial training, proceeding to fine-tuning only.")
+        #     agent_config = Config(config_path=config_path)
+        #     run_agent_finetuning(config=agent_config)
+        # else:
+        #     agent_config = Config(config_path=config_path)
+        #     run_agent_training(config=agent_config)
 
         logger.info("\n--- Analyze Features ---")
         # Add feature analysis code here
-        analyze_model_features()
+        # analyze_model_features()
         logger.info("FEATURE ANALYSIS COMPLETED SUCCESSFULLY! ✅")
-
-
+        
+        
         logger.info("\\n--- PIPELINE STEP 5: Professional Backtesting on Unseen Data ---")
         run_backtest()
-        
+
+        logger.info("\\n--- Plots ---")
+        # Add code to generate and display plots here
+        plotter = Plotter()
+        plotter.run_all_plots()
+
         logger.info("\\n" + "="*58); logger.info("✅ PIPELINE COMPLETED SUCCESSFULLY! ✅"); logger.info("="*58)
 
     except Exception as e:
