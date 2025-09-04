@@ -1,49 +1,42 @@
-
 # config/config_sac.yaml
-# Professional Hyperparameters for the SAC agent, adjusted for the 15-min dataset.
-
-# %%writefile config/config_sac.yaml
-# config/config_sac.yaml
-# Professional Hyperparameters for the SAC agent - CORRECTED FOR DATA SIZE
+# HYPERPARAMETERS OPTIMIZED FOR SINGLE-ENVIRONMENT TRAINING
 
 training:
-  # Base SAC parameters used during each walk-forward split
   learning_rate: 0.0003
   buffer_size: 200000
   batch_size: 256
   tau: 0.005
   gamma: 0.99
-  train_freq: [1, "step"]
-  learning_starts: 10000
   
-  # --- Professional Walk-Forward Training Settings ---
-  # MODIFIED: These values have been reduced to match a realistic dataset size
-  # after resampling to a 15-minute timeframe.
+  # --- CRITICAL EFFICIENCY FIX ---
+  # Since we have only 1 env, we need to perform more updates per step.
+  # We tell the model to perform 4 gradient updates after each step it takes.
+  gradient_steps: 4
+  train_freq: [1, "step"] # This means "collect 1 step, then update"
+  # -----------------------------
+  
+  learning_starts: 25000 # Increase learning_starts to ensure buffer is well-populated
+  
   walk_forward:
     n_splits: 5
-    min_train_size: 120000   # Start with 150k bars (more realistic)
-    test_size: 30000     # Use 30k bars for validation in each split
-    timesteps_per_split: 150000 # Training duration for each split
+    min_train_size: 40000
+    test_size: 30000
+    timesteps_per_split: 150000
 
-  # --- Professional Fine-Tuning Settings for Production Model ---
   fine_tuning:
-    recent_data_years: 2.5   # Use the last 2.5 years of data
-    total_timesteps: 400000  # Duration of the fine-tuning stage
-    learning_rate: 0.00001   # Use a much smaller learning rate for fine-tuning
+    recent_data_years: 2.5
+    total_timesteps: 200000 # Reduced for faster final tuning
+    learning_rate: 0.00001
 
 environment:
   initial_balance: 10000
   sequence_length: 150
   commission_pct: 0.0005
-  action_penalty: 0.001 # Note: this is for discrete env, will be ignored by turnover_penalty
-  turnover_penalty: 0.001 # Penalty for changing position size in the continuous env
+  turnover_penalty: 0.001
 
 model:
   features_dim: 256
-  # Transformer parameters from the custom policy file
+  cnn_out_channels: 64
   transformer_n_heads: 4
   transformer_n_layers: 2
   transformer_dropout: 0.1
-
-logging:
-  level: "INFO"

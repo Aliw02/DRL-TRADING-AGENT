@@ -1,19 +1,24 @@
-# main_bot.py (CRITICAL UPDATE: Now operates on a 15-minute cycle)
+# main_bot.py (FINAL, UNCERTAINTY-AWARE VERSION)
 import os
+import sys
 import time
 import pandas as pd
 import MetaTrader5 as mt5
-import sys
 
-# Add project path
+# --- Add project path to allow imports from other directories ---
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from utils.custom_indicators import calculate_all_indicators
 from mt5_connector import connect_mt5, get_mt5_data
-from data_preprocessor import LiveDataPreprocessor # We will use the class-based preprocessor
-from trading_agent import load_trading_model, get_action_from_model
+from data_preprocessor import LiveDataPreprocessor
+from trading_agent import load_trading_model, get_action_and_uncertainty
 from trade_executor import execute_trade
 from config.init import config
+from utils.logger import setup_logging, get_logger
+
+# --- Setup Logging ---
+setup_logging()
+logger = get_logger(__name__)
 
 # --- Bot Settings ---
 MT5_LOGIN = 779654
@@ -23,96 +28,99 @@ SYMBOL = "XAUUSD"
 LOT_SIZE = 0.01
 
 # --- Timeframe Settings ---
-LIVE_TIMEFRAME = mt5.TIMEFRAME_M1  # We fetch 1-minute data
-MODEL_TIMEFRAME = '15min'         # But the model operates on 15-minute data
-SEQUENCE_LENGTH = config.get('environment.sequence_length', 150) # From config_sac.yaml
+LIVE_TIMEFRAME = mt5.TIMEFRAME_M1
+MODEL_TIMEFRAME = '15min'
+SEQUENCE_LENGTH = config.get('environment.sequence_length', 150)
+
+# --- UNCERTAINTY THRESHOLD ---
+# We will only trade if the model's action uncertainty (std dev) is BELOW this value.
+# This is a hyperparameter you can tune. A lower value makes the bot more cautious.
+UNCERTAINTY_THRESHOLD = 0.25
 
 def main():
+    """
+    Main function to run the uncertainty-aware trading bot.
+    """
     if not connect_mt5(MT5_LOGIN, MT5_PASSWORD, MT5_SERVER):
         return
 
     try:
+        logger.info("Initializing bot components...")
         preprocessor = LiveDataPreprocessor()
         model = load_trading_model()
-        if model is None: return
-    except Exception:
+        if model is None:
+            logger.error("Failed to load the trading model. Exiting.")
+            return
+    except Exception as e:
+        logger.error(f"Initialization failed: {e}", exc_info=True)
         return
 
-    print("🚀 Starting trading bot on a 15-minute cycle...")
+    logger.info(f"🚀 Starting Uncertainty-Aware trading bot.")
+    logger.info(f"Symbol: {SYMBOL}, Model Timeframe: {MODEL_TIMEFRAME}, Uncertainty Threshold: {UNCERTAINTY_THRESHOLD}")
 
     while True:
-        # --- 1. Fetch Sufficient 1-Minute Data ---
-        # We need enough 1-min bars to create at least SEQUENCE_LENGTH + (some buffer for indicators) of 15-min bars.
-        # Calculation: (150 sequences + 50 for indicator stability) * 15 minutes/sequence = 3000 bars
-        bars_to_fetch = ((SEQUENCE_LENGTH + 50) * 15) + 1000
-
-        df_m1 = get_mt5_data(SYMBOL, LIVE_TIMEFRAME, bars_to_fetch)
-        
-        if df_m1 is None or df_m1.empty:
-            print("Could not fetch 1-minute data, waiting...")
-            time.sleep(60) # Wait 1 minute before retrying
-            continue
-        
-        print(f"Fetched {len(df_m1)} 1-minute bars.")
-
-        # --- 2. Resample Data to 15-Minute Timeframe ---
-        # This is the crucial step to match the training data format
         try:
-            aggregation_rules = {
-                'open': 'first', 'high': 'max',
-                'low': 'min', 'close': 'last', 'volume': 'sum'
-            }
-            df_m15 = df_m1.resample(MODEL_TIMEFRAME).agg(aggregation_rules).dropna()
-            print(f"Resampled to {len(df_m15)} 15-minute bars.")
-        except Exception as e:
-            print(f"Error during resampling: {e}")
-            time.sleep(60)
-            continue
+            # --- 1. Fetch and Prepare Data ---
+            logger.info("Fetching latest market data...")
+            # Fetch enough 1-min bars to create a sufficient history of 15-min bars
+            bars_to_fetch = ((SEQUENCE_LENGTH + 100) * 15)
+            df_m1 = get_mt5_data(SYMBOL, LIVE_TIMEFRAME, bars_to_fetch)
 
-        # --- 3. Calculate Indicators on the 15-Minute Data ---
-        df_with_indicators = calculate_all_indicators(df_m15)
-
-        # --- 4. Preprocess Data for the Model ---
-        # The preprocessor now receives the correct 15-minute data
-        final_observation = preprocessor.preprocess(df_with_indicators)
-        
-        if final_observation is None:
-            print("Data preprocessing failed, waiting for next cycle.")
-            # Wait for the next 15-minute candle
-            time.sleep(15 * 60)
-            continue
+            if df_m1 is None or df_m1.empty:
+                logger.warning("Could not fetch 1-minute data. Waiting for 1 minute.")
+                time.sleep(60)
+                continue
             
-        # --- 5. Get Trading Action ---
-        action = get_action_from_model(model, final_observation)
-        if action is None:
-            print("Failed to get action from model, waiting for next cycle.")
+            # Resample to the model's timeframe
+            aggregation_rules = {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
+            df_m15 = df_m1.resample(MODEL_TIMEFRAME).agg(aggregation_rules).dropna()
+            
+            # Calculate indicators and preprocess for the model
+            df_with_indicators = calculate_all_indicators(df_m15)
+            final_observation = preprocessor.preprocess(df_with_indicators)
+            
+            if final_observation is None:
+                logger.warning("Data preprocessing failed. Waiting for the next 15-minute candle.")
+                time.sleep(15 * 60)
+                continue
+            
+            # --- 2. Get Action and Uncertainty from Model ---
+            action, uncertainty = get_action_and_uncertainty(model, final_observation)
+            
+            if action is None:
+                logger.error("Failed to get action from model. Waiting for the next cycle.")
+                time.sleep(15 * 60)
+                continue
+            
+            action_value = action[0][0]
+            uncertainty_value = uncertainty[0][0]
+            
+            logger.info(f"Model Raw Output -> Action: {action_value:.3f} | Uncertainty: {uncertainty_value:.3f}")
+
+            # --- 3. Make a Decision Based on Confidence ---
+            final_decision_value = 0.0 # Default action is to HOLD
+
+            if uncertainty_value > UNCERTAINTY_THRESHOLD:
+                logger.warning(f"Model is UNCERTAIN (Uncertainty {uncertainty_value:.3f} > {UNCERTAINTY_THRESHOLD}). Overriding to HOLD.")
+            else:
+                logger.info(f"Model is CONFIDENT (Uncertainty {uncertainty_value:.3f} <= {UNCERTAINTY_THRESHOLD}). Proceeding with action.")
+                # We still need a strong signal to act
+                if abs(action_value) > 0.5:
+                     final_decision_value = action_value
+                else:
+                    logger.info(f"Signal is too weak (|{action_value:.3f}| <= 0.5). Holding position.")
+
+
+            # --- 4. Execute the Final Decision ---
+            execute_trade(SYMBOL, final_decision_value, LOT_SIZE)
+
+            # --- 5. Wait for the Next Cycle ---
+            logger.info("Decision complete. Waiting for the next 15-minute candle...")
             time.sleep(15 * 60)
-            continue
-        
-        # --- 6. Execute Trade ---
-        # The SAC model outputs a continuous value. We can interpret it as:
-        # > 0.3 = Strong Buy Signal (e.g., action 1)
-        # < -0.3 = Strong Sell Signal (e.g., action 2)
-        # otherwise = Hold (e.g., action 0)
-        
-        # This part requires you to adapt `execute_trade` or interpret the action here.
-        # Let's create a simple interpretation:
-        action_value = action[0][0]
-        print(f"Model raw action: {action_value:.2f}")
 
-        # The `execute_trade` function in your project expects discrete actions (0,1,2)
-        # Let's convert the continuous SAC action to discrete
-        # discrete_action = 0 # Hold
-        # if action_value > 0.5: # Threshold for buy
-        #     discrete_action = 1 # Buy
-        # elif action_value < -0.5: # Threshold for sell
-        #     discrete_action = 2 # Sell
-
-        execute_trade(SYMBOL, action_value, LOT_SIZE)
-
-        # --- 7. Wait for the Next 15-Minute Candle ---
-        print(f"Decision made. Waiting for the next 15-minute candle...")
-        time.sleep(15 * 60)
+        except Exception as e:
+            logger.error(f"An unexpected error occurred in the main loop: {e}", exc_info=True)
+            time.sleep(60) # Wait a minute before retrying after a major error
         
 if __name__ == "__main__":
     main()

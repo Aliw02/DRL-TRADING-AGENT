@@ -22,16 +22,16 @@ def run_full_pipeline(config_path: str):
 
     try:
         # --- CRITICAL FIX: Each step's success is required to proceed ---
-        logger.info("\\n--- PIPELINE STEP 1: Initial Feature Engineering ---")
-        run_preprocessing()
+        # logger.info("\\n--- PIPELINE STEP 1: Initial Feature Engineering ---")
+        # run_preprocessing()
 
-        logger.info("\\n--- PIPELINE STEP 2: Dynamic Market Regime Detection ---")
-        train_and_analyze_regime_model()
+        # logger.info("\\n--- PIPELINE STEP 2: Dynamic Market Regime Detection ---")
+        # train_and_analyze_regime_model()
 
-        logger.info("\\n--- PIPELINE STEP 3: Enriching Dataset with Regime Vectors ---")
-        enrich_dataset_with_regimes()
+        # logger.info("\\n--- PIPELINE STEP 3: Enriching Dataset with Regime Vectors ---")
+        # enrich_dataset_with_regimes()
 
-        logger.info("\\n--- PIPELINE STEP 4: Professional Agent Training ---")
+        # logger.info("\\n--- PIPELINE STEP 4: Professional Agent Training ---")
         run_full_training = True # Set to False to skip initial training and only do fine-tuning
         if not run_full_training:
             logger.info("⚠️ Skipping initial training, proceeding to fine-tuning only.")
@@ -41,10 +41,10 @@ def run_full_pipeline(config_path: str):
             agent_config = Config(config_path=config_path)
             run_agent_training(config=agent_config)
 
-        logger.info("\n--- Analyze Features ---")
+        # logger.info("\n--- Analyze Features ---")
         # Add feature analysis code here
-        analyze_model_features()
-        logger.info("FEATURE ANALYSIS COMPLETED SUCCESSFULLY! ✅")
+        # analyze_model_features()
+        # logger.info("FEATURE ANALYSIS COMPLETED SUCCESSFULLY! ✅")
         
         
         logger.info("\\n--- PIPELINE STEP 5: Professional Backtesting on Unseen Data ---")

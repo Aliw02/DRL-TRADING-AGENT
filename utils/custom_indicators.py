@@ -43,6 +43,18 @@ def _add_time_features(df: pd.DataFrame):
         df['day_sin'], df['day_cos'] = np.sin(2*np.pi*day/7), np.cos(2*np.pi*day/7)
     return df
 
+def _add_advanced_statistical_features(df: pd.DataFrame, window=20):
+    """Calculates rolling skewness and kurtosis of returns."""
+    logger.info("Engineering advanced statistical features (Skew/Kurtosis)...")
+    
+    # Calculate log returns for better statistical properties
+    returns = np.log(df['close'] / df['close'].shift(1)).fillna(0)
+    
+    df[f'returns_skew_{window}'] = returns.rolling(window=window).skew()
+    df[f'returns_kurt_{window}'] = returns.rolling(window=window).kurt()
+    
+    return df
+
 def calculate_all_indicators(df: pd.DataFrame):
     if not isinstance(df.index, pd.DatetimeIndex):
         try: df.set_index(pd.to_datetime(df['time']), inplace=True)
@@ -76,6 +88,7 @@ def calculate_all_indicators(df: pd.DataFrame):
     
     df = _add_candlestick_features(df)
     df = _add_time_features(df)
+    # df = _add_advanced_statistical_features(df) # <-- ADD THIS LINE
 
     logger.info("Cleaning up final dataframe...")
     return df.bfill().ffill().fillna(0)

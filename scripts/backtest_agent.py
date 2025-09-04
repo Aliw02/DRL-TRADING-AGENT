@@ -47,10 +47,10 @@ def run_backtest():
         logger.info("All production artifacts loaded successfully.")
 
         # --- 2. Process Unseen Data (Same as before) ---
-        logger.info(f"Loading and processing unseen data from: {paths.BACKTEST_DATA_FILE}")
+        logger.info(f"Loading and processing unseen data from: {paths.BACKTEST_M1TF_DATA_FILE}")
         transformer = DataTransformer()
-        backtest_df = transformer.load_and_preprocess_data(file_path=str(paths.BACKTEST_DATA_FILE), timeframe='15min')
-        
+        backtest_df = transformer.load_and_preprocess_data(file_path=str(paths.BACKTEST_M1TF_DATA_FILE), timeframe='1min')
+
         # Enrich with regime probabilities
         regime_features = ['adx', 'bb_width', 'roc_norm', 'rsi_x_adx', 'atr']
         X_raw_regime = backtest_df[regime_features].ffill().bfill()
@@ -73,7 +73,7 @@ def run_backtest():
         # --- 3. Simulation with NEW Advanced Trade Management ---
         # --- Dynamic Lot Sizing Configuration ---
         BASE_LOT_SIZE = 0.01
-        MAX_LOT_SIZE = 1.7
+        MAX_LOT_SIZE = 5.0
         PROFIT_STEP_FOR_INCREASE = 100.0 # Increase lot size for every $100 of profit
 
         def calculate_dynamic_lot_size(equity, initial_balance):
@@ -122,108 +122,86 @@ def run_backtest():
             # --- STEP 1: ALWAYS get the model's latest signal on every bar ---
             obs_df = sim_df.iloc[i - sequence_length : i]
             obs_features = obs_df[feature_cols].values
-            
-            # The position feature should reflect the state *before* this bar's decision
             current_pos_size = 1.0 if open_position else 0.0
             position_feature = np.full((sequence_length, 1), current_pos_size, dtype=np.float32)
-            
             observation = np.expand_dims(np.concatenate([obs_features, position_feature], axis=1), axis=0)
             action_continuous, _ = agent_model.predict(observation, deterministic=True)
             action_value = action_continuous[0][0]
-            # logger.info(f"Bar {i}: Action Value = {action_value}")
-            # --- STEP 2: MANAGE any open position using the latest market data and model signal ---
+
+            # --- STEP 2: MANAGE any open position ---
             if open_position:
                 close_price = 0
                 exit_reason = None
-
-                # a. Check for Stop Loss Hit
+                
+                # Check for SL/TP/Counter-Signal exits (logic remains the same)
                 if open_position['type'] == 'BUY' and current_bar['low'] <= open_position['stop_loss']:
                     close_price = open_position['stop_loss']
                     exit_reason = 'Stop Loss Hit'
-                elif open_position['type'] == 'SELL' and current_bar['high'] >= open_position['stop_loss']:
-                    close_price = open_position['stop_loss']
-                    exit_reason = 'Stop Loss Hit'
+                elif not exit_reason and open_position['type'] == 'BUY' and current_bar['high'] >= open_position['take_profit']:
+                    close_price = open_position['take_profit']
+                    exit_reason = 'Fixed TP Hit'
+                elif not exit_reason and open_position['type'] == 'BUY' and action_value < SELL_THRESHOLD:
+                    close_price = current_bar['open']
+                    exit_reason = 'Model Counter-Signal'
 
-                # b. Check for Take Profit Hit (if SL not hit)
-                if not exit_reason:
-                    if USE_DYNAMIC_TP:
-                        if (open_position['type'] == 'BUY' and current_bar['bearish_flip'] == 1) or \
-                        (open_position['type'] == 'SELL' and current_bar['bullish_flip'] == 1):
-                            close_price = current_bar['open']
-                            exit_reason = 'Dynamic TP (CE Flip)'
-                    else: # Fixed ATR Take Profit
-                        if (open_position['type'] == 'BUY' and current_bar['high'] >= open_position['take_profit']):
-                            close_price = open_position['take_profit']
-                            exit_reason = 'Fixed TP Hit'
-                        elif (open_position['type'] == 'SELL' and current_bar['low'] <= open_position['take_profit']):
-                            close_price = open_position['take_profit']
-                            exit_reason = 'Fixed TP Hit'
-                
-                # c. Check for Model Counter-Signal (if SL/TP not hit)
-                if not exit_reason:
-                    if (open_position['type'] == 'BUY' and action_value < SELL_THRESHOLD) or \
-                    (open_position['type'] == 'SELL' and action_value > BUY_THRESHOLD):
-                        close_price = current_bar['open']
-                        exit_reason = 'Model Counter-Signal'
-
-                # If any exit condition was met, process the closed trade
                 if exit_reason:
-                    # **MODIFICATION: Use the lot size stored with the trade**
-                    trade_lot_size = open_position['lot_size']
-                    
+                    # PNL and Commission logic
                     price_difference = close_price - open_position['entry_price']
-                    gross_pnl = price_difference * (trade_lot_size / 0.01)
-                    if open_position['type'] == 'SELL':
-                        gross_pnl = -gross_pnl
-
-                    commission = trade_lot_size * COMMISSION_PER_STANDARD_LOT
+                    gross_pnl = price_difference * (open_position['lot_size'] / 0.01)
+                    commission = open_position['lot_size'] * COMMISSION_PER_STANDARD_LOT
                     net_pnl = gross_pnl - commission
-
+                    
+                    # Update equity *before* logging it
+                    equity += net_pnl
+                    
                     trades.append({
                         'entry_time': open_position['entry_time'],
                         'exit_time': current_bar['timestamp'],
-                        'lot_size': trade_lot_size, # Log the lot size for analysis
+                        'lot_size': open_position['lot_size'],
                         'type': open_position['type'],
                         'entry_price': open_position['entry_price'],
                         'exit_price': close_price,
+                        'atr_at_entry': open_position['atr_at_entry'], # <-- NEW: Log ATR
+                        'stop_loss': open_position['stop_loss'],
+                        'take_profit': open_position['take_profit'],
                         'net_profit': net_pnl,
+                        'equity_after_trade': equity, # <-- NEW: Log equity
                         'exit_reason': exit_reason
                     })
-                    equity += net_pnl
                     open_position = None
-                    
-            
-            if not open_position:
-                # --- STEP 3: LOOK FOR NEW ENTRIES (only if no position is currently open) ---
-                current_lot_size = calculate_dynamic_lot_size(equity, initial_balance)
 
+            # --- STEP 3: LOOK FOR NEW ENTRIES ---
+            if not open_position:
                 if action_value > BUY_THRESHOLD:
+                    current_lot_size = calculate_dynamic_lot_size(equity, initial_balance)
                     entry_price = current_bar['open']
                     atr_at_entry = current_bar['atr']
+                    
+                    # Calculate SL and TP
                     stop_loss = entry_price - (atr_at_entry * ATR_SL_MUL)
                     take_profit = entry_price + (atr_at_entry * ATR_TP_MUL)
-                    # logger.info(f"Action value: {action_value}, Entry Price: {entry_price}, Stop Loss: {stop_loss}, Take Profit: {take_profit}")
-                    # **Store the calculated lot size with the position**
-                    open_position = {'type': 'BUY', 'lot_size': current_lot_size, 'entry_price': entry_price, 'entry_time': current_bar['timestamp'], 'stop_loss': stop_loss, 'take_profit': take_profit}
-                
-                elif action_value < SELL_THRESHOLD:
-                    entry_price = current_bar['open']
-                    atr_at_entry = current_bar['atr']
-                    stop_loss = entry_price + (atr_at_entry * ATR_SL_MUL)
-                    take_profit = entry_price - (atr_at_entry * ATR_TP_MUL)
-                    # logger.info(f"Action value: {action_value}, Entry Price: {entry_price}, Stop Loss: {stop_loss}, Take Profit: {take_profit}")
-                    # **Store the calculated lot size with the position**
-                    open_position = {'type': 'SELL', 'lot_size': current_lot_size, 'entry_price': entry_price, 'entry_time': current_bar['timestamp'], 'stop_loss': stop_loss, 'take_profit': take_profit}
+                    
+                    # --- NEW: Hardened Safety Swap for SL/TP ---
+                    # This condition handles the case where a negative ATR might have flipped the levels.
+                    if stop_loss > take_profit:
+                        stop_loss, take_profit = take_profit, stop_loss # Swap the values
+                    
+                    open_position = {
+                        'type': 'BUY', 
+                        'lot_size': current_lot_size, 
+                        'entry_price': entry_price, 
+                        'entry_time': current_bar['timestamp'], 
+                        'atr_at_entry': atr_at_entry, # Store ATR with the trade
+                        'stop_loss': stop_loss, 
+                        'take_profit': take_profit
+                    }
+                # NOTE: Sell logic can be added here with its own safety swap.
 
             # --- STEP 4: UPDATE EQUITY CURVE ---
             temp_equity = equity
             if open_position:
-                # **MODIFICATION: Use the trade's specific lot size for unrealized PnL**
-                trade_lot_size = open_position['lot_size']
                 price_difference = current_bar['close'] - open_position['entry_price']
-                unrealized_pnl = price_difference * (trade_lot_size / 0.01)
-                if open_position['type'] == 'SELL':
-                    unrealized_pnl = -unrealized_pnl
+                unrealized_pnl = price_difference * (open_position['lot_size'] / 0.01)
                 temp_equity += unrealized_pnl
             equity_curve.append(temp_equity)
 

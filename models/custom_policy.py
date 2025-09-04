@@ -85,3 +85,89 @@ class CustomActorCriticPolicy(BaseFeaturesExtractor):
             feat_dim = getattr(self, '_features_dim', None) or getattr(self, 'features_dim', None) or 256
             features = torch.zeros(batch_size, feat_dim, device=observations.device)
             return features
+        
+
+# models/custom_policy.py (CORRECTED CLASS NAME)
+
+import torch
+import torch.nn as nn
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+from utils.logger import get_logger
+from config.init import config
+
+logger = get_logger(__name__)
+
+# --- FIX: The class name is now corrected to match the import statement ---
+class HybridCNNTransformerPolicy(BaseFeaturesExtractor):
+    """
+    An advanced hybrid feature extractor combining:
+    1. CNNs for robust local pattern detection (e.g., candlestick patterns).
+    2. A Transformer Encoder for capturing long-range dependencies and context.
+    3. A [CLS] token to create a single, powerful representation of the entire sequence.
+    """
+    
+    def __init__(self, observation_space, features_dim=None):
+        features_dim = features_dim or config.get('model.features_dim', 256)
+        super().__init__(observation_space, features_dim)
+        
+        self.sequence_length = observation_space.shape[0]
+        self.feature_dim = observation_space.shape[1]
+
+        # --- 1. CNN Stream for Local Feature Extraction ---
+        cnn_out_channels = config.get('model.cnn_out_channels', 64)
+        self.cnn_stream = nn.Sequential(
+            nn.Conv1d(in_channels=self.feature_dim, out_channels=cnn_out_channels, kernel_size=3, padding=1),
+            nn.BatchNorm1d(cnn_out_channels), # BatchNorm stabilizes training
+            nn.ReLU(),
+            nn.Conv1d(in_channels=cnn_out_channels, out_channels=cnn_out_channels, kernel_size=5, padding=2),
+            nn.BatchNorm1d(cnn_out_channels),
+            nn.ReLU(),
+        )
+        
+        # --- 2. [CLS] Token ---
+        transformer_input_dim = cnn_out_channels
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, transformer_input_dim))
+
+        # --- 3. Transformer Stream for Global Context ---
+        n_heads = config.get('model.transformer_n_heads', 4)
+        n_layers = config.get('model.transformer_n_layers', 2)
+        dropout = config.get('model.transformer_dropout', 0.1)
+        
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=transformer_input_dim, 
+            nhead=n_heads, 
+            dropout=dropout,
+            batch_first=True
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+
+        # --- 4. Final Fully Connected Layer (MLP Head) ---
+        self.fc_head = nn.Sequential(
+            nn.LayerNorm(transformer_input_dim),
+            nn.Linear(transformer_input_dim, features_dim),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(features_dim, features_dim),
+            nn.ReLU()
+        )
+        
+        logger.info(f"✅ State-of-the-art Hybrid CNN-Transformer policy initialized.")
+    
+    def forward(self, observations: torch.Tensor) -> torch.Tensor:
+        x = observations.permute(0, 2, 1)
+        cnn_output = self.cnn_stream(x)
+        
+        transformer_input = cnn_output.permute(0, 2, 1)
+        
+        batch_size = transformer_input.shape[0]
+        cls_tokens = self.cls_token.expand(batch_size, -1, -1) 
+        
+        transformer_input_with_cls = torch.cat((cls_tokens, transformer_input), dim=1)
+        
+        transformer_output = self.transformer_encoder(transformer_input_with_cls)
+        
+        cls_output = transformer_output[:, 0, :]
+        
+        features = self.fc_head(cls_output)
+        
+        return features

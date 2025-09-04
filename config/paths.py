@@ -22,6 +22,7 @@ FINAL_MODEL_DIR = RESULTS_DIR / "final_model_for_live"
 # Input data files (read from /kaggle/input)
 TRAIN_DATA_FILE = DATA_DIR / "XAUUSDM1-FULL.csv"
 BACKTEST_DATA_FILE = DATA_DIR / "XAUUSDM15-TEST-UNSEEN.csv"
+BACKTEST_M1TF_DATA_FILE = DATA_DIR / "XAUUSDM1-TEST-UNSEEN.csv"
 
 # Generated data files (written to /kaggle/working/results)
 PROCESSED_DATA_FILE = RESULTS_DIR / "processed_training_data.parquet"
@@ -34,4 +35,5 @@ FINAL_SCALER_PATH = FINAL_MODEL_DIR / "final_agent_scaler.joblib"
 # --- Create all necessary output directories ---
 # We only create directories in the writable /kaggle/working area
 for path in [RESULTS_DIR, WALK_FORWARD_DIR, FINAL_MODEL_DIR]:
-    path.mkdir(parents=True, exist_ok=True)
+    if path and not path.exists():
+        path.mkdir(path, exist_ok=True)

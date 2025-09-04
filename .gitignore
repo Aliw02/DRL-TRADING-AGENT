@@ -56,3 +56,5 @@ results/
 *.tar
 *.gz
 *.rar
+
+main_bot.py

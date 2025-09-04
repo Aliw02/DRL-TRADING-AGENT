@@ -5,6 +5,7 @@ from config import paths
 from utils.accelerator import DEVICE
 from models.custom_policy import CustomActorCriticPolicy # <-- **IMPORT YOUR CUSTOM POLICY**
 from config.init import config as agent_config
+import torch
 
 def load_trading_model():
     """
@@ -51,3 +52,31 @@ def get_action_from_model(model, observation):
     except Exception as e:
         print(f"Failed to predict action: {e}")
         return None
+
+
+import torch
+
+def get_action_and_uncertainty(model, observation):
+    """
+    Gets a trading action from the SAC model AND its uncertainty level.
+    Uncertainty = standard deviation of the Gaussian policy.
+    """
+    try:
+        # حول observation إلى tensor
+        obs_tensor = torch.as_tensor(observation).float().to(model.device)
+
+        # استخرج mean و log_std باستعمال دالة actor.get_dist_params
+        mean_action, log_std = model.actor.get_dist_params(obs_tensor)
+
+        # احسب std = exp(log_std)
+        std = torch.exp(log_std)
+
+        # حول للـ numpy
+        action = mean_action.detach().cpu().numpy()
+        uncertainty = std.detach().cpu().numpy()
+
+        return action, uncertainty
+
+    except Exception as e:
+        print(f"Failed to predict action and uncertainty: {e}")
+        return None, None

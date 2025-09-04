@@ -1,22 +1,20 @@
-
-# %%writefile envs/trading_env.py
-# envs/trading_env.py (FINAL ACCELERATED VERSION)
+# envs/trading_env.py (OPTIMIZED FOR CPU-BASED DATA HANDLING)
 import gymnasium as gym
 from gymnasium import spaces
-from utils.accelerator import np, IS_GPU_AVAILABLE
+import numpy as np # <-- We will use the standard numpy
+import pandas as pd # <-- We will use the standard pandas
 from utils.logger import get_logger
 from config.init import config
-from utils.metrics import calculate_sharpe_ratio
+from utils.metrics import calculate_sortino_ratio
 
 logger = get_logger(__name__)
 
 class TradingEnv(gym.Env):
     metadata = {'render.modes': ['human']}
     
-    def __init__(self, df, initial_balance=None, sequence_length=None):
+    def __init__(self, df: pd.DataFrame, initial_balance=None, sequence_length=None): # Type hint for clarity
         super(TradingEnv, self).__init__()
         
-        # Ensure the DataFrame has an integer index
         self.df = df.reset_index(drop=True)
         self.max_steps = len(self.df) - 1
         
@@ -34,10 +32,8 @@ class TradingEnv(gym.Env):
         self.reset()
     
     def _get_price(self, step):
-        if IS_GPU_AVAILABLE:
-            return self.df['close'].iloc[step].item()
-        else:
-            return self.df.loc[step, 'close']
+        # Direct access using pandas is fast on CPU
+        return self.df.loc[step, 'close']
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -46,12 +42,11 @@ class TradingEnv(gym.Env):
         self.cash = self.initial_balance
         self.position_size = 0.0
         self.units_held = 0.0
-        self.portfolio_return_history = [0.0] * self.sequence_length 
+        self.portfolio_return_history = [0.0] * self.sequence_length
+        self.max_portfolio_value = self.initial_balance
         
-        # Explicitly convert the cupy array to numpy array on reset
+        # No more conversions needed, obs is already a numpy array
         obs = self._next_observation()
-        if IS_GPU_AVAILABLE:
-            obs = np.asnumpy(obs)
             
         return obs, {}
     
@@ -74,33 +69,33 @@ class TradingEnv(gym.Env):
         obs = self._next_observation()
         info = {'equity': self.portfolio_value, 'position_size': self.position_size}
         
-        # FIX: Explicitly convert cupy array to numpy array before returning
-        if IS_GPU_AVAILABLE:
-            obs = np.asnumpy(obs)
-            
+        # No more conversions needed here either
         return obs, reward, done, False, info
 
     def _update_portfolio_value(self):
         current_price = self._get_price(self.current_step)
         position_market_value = self.units_held * current_price
         self.portfolio_value = self.cash + position_market_value
+        
+        if self.portfolio_value > self.max_portfolio_value:
+            self.max_portfolio_value = self.portfolio_value
 
     def _get_reward(self, turnover):
-        returns_np_array = np.array(self.portfolio_return_history)
-        if IS_GPU_AVAILABLE:
-            returns_np_array = np.asnumpy(returns_np_array)
-            
-        sharpe_reward = calculate_sharpe_ratio(returns_np_array)
-        penalty = self.turnover_penalty * turnover
-        return sharpe_reward - penalty
+        returns_np_array = np.array(self.portfolio_return_history) # Already on CPU
+        sortino_reward = calculate_sortino_ratio(returns_np_array)
+        step_return = self.portfolio_return_history[-1]
+        pnl_reward = np.tanh(step_return * 10)
+        current_drawdown = (self.max_portfolio_value - self.portfolio_value) / self.max_portfolio_value
+        drawdown_penalty = - (current_drawdown ** 2)
+        turnover_penalty = self.turnover_penalty * turnover
+        reward = ((sortino_reward * 0.5) + (pnl_reward * 0.1) + (drawdown_penalty * 0.4) - turnover_penalty)
+        return 0.0 if np.isnan(reward) else float(reward)
 
     def _take_action(self, target_position_size):
         current_price = self._get_price(self.current_step)
         if current_price == 0: return
-
         target_units = (self.portfolio_value * target_position_size) / current_price
         units_to_trade = target_units - self.units_held
-        
         if units_to_trade != 0:
             cost_of_trade = abs(units_to_trade * current_price)
             commission = cost_of_trade * self.commission_pct
@@ -112,7 +107,9 @@ class TradingEnv(gym.Env):
         start_idx = self.current_step - self.sequence_length + 1
         end_idx = self.current_step
         
+        # .values on a pandas DataFrame returns a numpy array directly
         features_array = self.df.loc[start_idx:end_idx, self.feature_cols].values
+        
         position_feature = np.full((len(features_array), 1), self.position_size, dtype=np.float32)
         obs = np.concatenate([features_array, position_feature], axis=1)
         return obs.astype(np.float32)
