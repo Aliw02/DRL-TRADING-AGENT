@@ -1,21 +1,24 @@
 # config/config_sac.yaml
-# HYPERPARAMETERS OPTIMIZED FOR SINGLE-ENVIRONMENT TRAINING
+# FINAL AND GUARANTEED "BATCH TRAINING" CONFIGURATION
 
 training:
   learning_rate: 0.0003
-  buffer_size: 200000
-  batch_size: 256
+  buffer_size: 75000
+  batch_size: 128
   tau: 0.005
   gamma: 0.99
   
-  # --- CRITICAL EFFICIENCY FIX ---
-  # Since we have only 1 env, we need to perform more updates per step.
-  # We tell the model to perform 4 gradient updates after each step it takes.
-  gradient_steps: 4
-  train_freq: [1, "step"] # This means "collect 1 step, then update"
-  # -----------------------------
+  # --- THE GUARANTEED FIX: CHANGE THE TRAINING STRATEGY ---
+  # Instead of training after every step, we collect a large chunk of data first,
+  # then perform all the training updates at once. This is vastly more efficient.
   
-  learning_starts: 25000 # Increase learning_starts to ensure buffer is well-populated
+  # Collect 1024 steps from the environment...
+  train_freq: [1024, "step"] # <<-- THE MOST CRITICAL CHANGE IN THE ENTIRE PROJECT
+  
+  # ...then perform 1024 gradient updates.
+  gradient_steps: -1 # <<-- Tells the model to match gradient_steps to train_freq (i.e., 1024)
+  
+  learning_starts: 10000 
   
   walk_forward:
     n_splits: 5
@@ -25,12 +28,12 @@ training:
 
   fine_tuning:
     recent_data_years: 2.5
-    total_timesteps: 200000 # Reduced for faster final tuning
+    total_timesteps: 200000
     learning_rate: 0.00001
 
 environment:
   initial_balance: 10000
-  sequence_length: 150
+  sequence_length: 60
   commission_pct: 0.0005
   turnover_penalty: 0.001
 

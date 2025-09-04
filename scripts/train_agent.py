@@ -20,6 +20,8 @@ from utils.accelerator import DEVICE
 logger = setup_logging()
 
 def train_one_segment(train_df: pd_cpu.DataFrame, eval_df: pd_cpu.DataFrame, save_path_prefix: str, config: Config):
+    
+
     log_dir, model_save_path = save_path_prefix / "logs/", save_path_prefix / "models/"
     os.makedirs(log_dir, exist_ok=True); os.makedirs(model_save_path, exist_ok=True)
 
@@ -28,10 +30,10 @@ def train_one_segment(train_df: pd_cpu.DataFrame, eval_df: pd_cpu.DataFrame, sav
     eval_env = make_vec_env(lambda: TradingEnv(eval_df), n_envs=1)
 
     eval_callback = EvalCallback(eval_env, best_model_save_path=str(model_save_path),
-                                 log_path=str(log_dir), eval_freq=5000, deterministic=True, n_eval_episodes=1)
+                                log_path=str(log_dir), eval_freq=7500, deterministic=True, n_eval_episodes=1)
 
     policy_kwargs = dict(features_extractor_class=HybridCNNTransformerPolicy,
-                       features_extractor_kwargs=dict(features_dim=config.get('model.features_dim')))
+                    features_extractor_kwargs=dict(features_dim=config.get('model.features_dim')))
     
     gradient_steps = config.get('training.gradient_steps', -1)
     
@@ -54,6 +56,7 @@ def train_one_segment(train_df: pd_cpu.DataFrame, eval_df: pd_cpu.DataFrame, sav
     del model
     del train_env
     del eval_env
+    gc.collect()  # Force garbage collection
 
 def run_walk_forward_training(full_df_cpu: pd_cpu.DataFrame, config: Config):
     logger.info("="*80); logger.info("STARTING WALK-FORWARD TRAINING PROCESS"); logger.info("="*80)
@@ -62,43 +65,51 @@ def run_walk_forward_training(full_df_cpu: pd_cpu.DataFrame, config: Config):
     holdout_size = test_size
     training_data_end = len(full_df_cpu) - holdout_size
     training_df_cpu, holdout_df_cpu = full_df_cpu.iloc[:training_data_end], full_df_cpu.iloc[training_data_end:]
-    
-    for i in range(n_splits):
-        split_num = i + 1
-        logger.info(f"\n===== Processing Walk-Forward Split {split_num}/{n_splits} =====")
-        split_save_path = paths.WALK_FORWARD_DIR / f"split_{split_num}"
-        if (split_save_path / "models/best_model.zip").exists():
-            logger.info(f"Split {split_num} already trained. Skipping."); continue
-        
-        train_end = min_train_size + i * test_size
-        test_end = train_end + test_size
-        
-        if test_end > len(training_df_cpu):
-            logger.warning(f"Not enough data for split {split_num}. Stopping."); break
-        
-        train_df_cpu_split, test_df_cpu_split = training_df_cpu.iloc[:train_end], training_df_cpu.iloc[train_end:test_end]
-        
-        scaler = RobustScaler()
-        feature_cols = [c for c in training_df_cpu.columns if c not in ['open', 'high', 'low', 'close', 'time', 'timestamp']]
-        
-        train_df_scaled_cpu = pd_cpu.DataFrame(scaler.fit_transform(train_df_cpu_split[feature_cols]), columns=feature_cols, index=train_df_cpu_split.index)
-        train_df_scaled_cpu['close'] = train_df_cpu_split['close']
-        
-        test_df_scaled_cpu = pd_cpu.DataFrame(scaler.transform(test_df_cpu_split[feature_cols]), columns=feature_cols, index=test_df_cpu_split.index)
-        test_df_scaled_cpu['close'] = test_df_cpu_split['close']
-        
-        train_df_processed = train_df_scaled_cpu.reset_index(drop=True)
-        test_df_processed = test_df_scaled_cpu.reset_index(drop=True)
-        
-        train_one_segment(train_df_processed, test_df_processed, split_save_path, config)
-        joblib.dump(scaler, split_save_path / "scaler.joblib")
+    try:
+        for i in range(n_splits):
+            split_num = i + 1
+            logger.info(f"\n===== Processing Walk-Forward Split {split_num}/{n_splits} =====")
+            split_save_path = paths.WALK_FORWARD_DIR / f"split_{split_num}"
+            if (split_save_path / "models/best_model.zip").exists():
+                logger.info(f"Split {split_num} already trained. Skipping."); continue
+            
+            train_end = min_train_size + i * test_size
+            test_end = train_end + test_size
+            
+            if test_end > len(training_df_cpu):
+                logger.warning(f"Not enough data for split {split_num}. Stopping."); break
+            
+            train_df_cpu_split, test_df_cpu_split = training_df_cpu.iloc[:train_end], training_df_cpu.iloc[train_end:test_end]
+            
+            scaler = RobustScaler()
+            feature_cols = [c for c in training_df_cpu.columns if c not in ['open', 'high', 'low', 'close', 'time', 'timestamp']]
+            
+            train_df_scaled_cpu = pd_cpu.DataFrame(scaler.fit_transform(train_df_cpu_split[feature_cols]), columns=feature_cols, index=train_df_cpu_split.index)
+            train_df_scaled_cpu['close'] = train_df_cpu_split['close']
+            
+            test_df_scaled_cpu = pd_cpu.DataFrame(scaler.transform(test_df_cpu_split[feature_cols]), columns=feature_cols, index=test_df_cpu_split.index)
+            test_df_scaled_cpu['close'] = test_df_cpu_split['close']
+            
+            train_df_processed = train_df_scaled_cpu.reset_index(drop=True)
+            test_df_processed = test_df_scaled_cpu.reset_index(drop=True)
+            
+            train_one_segment(train_df_processed, test_df_processed, split_save_path, config)
 
+    except KeyboardInterrupt:
+        joblib.dump(scaler, split_save_path / "scaler.joblib")
+        logger.info("SCALER SAVED!!")
+        logger.info("Walk-forward training interrupted by user.")
+    except Exception as e:
+        logger.error(f"Error during walk-forward training: {e}", exc_info=True)
+    finally:
+        # joblib.dump(scaler, split_save_path / "scaler.joblib")
         # --- MEMORY LEAK FIX ---
+        # -------------------------
         logger.info(f"Collecting garbage to free up memory before next split...")
         gc.collect()
-        # -------------------------
-
-    logger.info("="*80); logger.info("Walk-Forward Training Process Completed"); logger.info("="*80)
+        logger.info("="*80); logger.info("Walk-Forward Training Process Completed"); logger.info("="*80)
+        
+    
     return holdout_df_cpu
 
 def find_champion_model(holdout_df_cpu: pd_cpu.DataFrame, config: Config):
