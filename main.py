@@ -14,7 +14,7 @@ from scripts.train_regime_model import train_and_analyze_regime_model
 from scripts.create_enriched_dataset import enrich_dataset_with_regimes
 from scripts.train_specialists import run_specialist_training_pipeline
 from scripts.backtest_hierarchical import run_hierarchical_backtest
-from scripts.plot_results import Plotter
+from scripts.plot_results import HierarchicalPlotter
 from config.init import Config
 from config import paths
 
@@ -63,7 +63,7 @@ def run_full_hierarchical_pipeline(config_path: str):
         # --- STAGE 6: Visualization of Hierarchical Performance ---
         logger.info("\n--- PIPELINE STAGE 6: Generating Strategic Visualizations ---")
         # Note: The plotter will need to be pointed to the new hierarchical result files
-        plotter = Plotter() 
+        plotter = HierarchicalPlotter()
         plotter.run_all_plots()
 
         logger.info("\n" + "=" * 60)

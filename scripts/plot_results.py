@@ -1,167 +1,152 @@
-# scripts/plot_results.py (FINAL, ROBUST, AND COMPLETE VERSION)
+# scripts/plot_results.py
+# HIERARCHICAL SQUAD PERFORMANCE AND INTELLIGENCE DASHBOARD
 
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import seaborn as sns
-import numpy as np
 import os
 import sys
 
-# --- Add project path ---
+# --- Add project root to path ---
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from config import paths
+from utils.metrics import calculate_performance_metrics
+from utils.logger import setup_logging, get_logger
 
-sns.set(style='whitegrid', font_scale=1.2)
-
-class Plotter:
-    def __init__(self):
+class HierarchicalPlotter:
+    def __init__(self, results_suffix=""):
         """
-        Initializes the Plotter. It robustly loads all data files and reconstructs
-        the equity DataFrame to ensure it has the correct timestamps.
+        Initializes the plotter for a specific backtest run (e.g., a stress test).
         """
-        self.plot_dir = paths.RESULTS_DIR / "plots"
+        self.plot_dir = paths.RESULTS_DIR / f"plots{results_suffix}"
         self.plot_dir.mkdir(parents=True, exist_ok=True)
-        
-        self.equity_df = None
-        self.trades_df = None
-        self.sim_df = None
-        self.data_loaded = False
+        self.results_suffix = results_suffix
+        self.data_loaded = self._load_data()
 
+    def _load_data(self):
+        """ Robustly loads all data files required for plotting. """
         try:
-            # --- Step 1: Attempt to load all necessary files ---
-            equity_path = paths.RESULTS_DIR / "final_backtest_equity.csv"
-            trades_path = paths.RESULTS_DIR / "final_backtest_trades.csv"
-            sim_path = paths.RESULTS_DIR / "final_backtest_simulation_data.csv"
-
-            print("Attempting to load backtest result files...")
-            equity_data = pd.read_csv(equity_path)
-            self.trades_df = pd.read_csv(trades_path)
-            self.sim_df = pd.read_csv(sim_path)
+            equity_path = paths.RESULTS_DIR / f"hierarchical_backtest_equity{self.results_suffix}.csv"
+            trades_path = paths.RESULTS_DIR / f"hierarchical_backtest_trades{self.results_suffix}.csv"
+            sim_path = paths.RESULTS_DIR / "final_backtest_simulation_data.csv" # Base sim data for price
             
-            # --- Step 2: If loading is successful, robustly process the data ---
-            print("Files loaded. Processing and aligning data...")
+            self.equity_df = pd.read_csv(equity_path)
+            self.trades_df = pd.read_csv(trades_path, parse_dates=['entry_time', 'exit_time'])
+            sim_df_raw = pd.read_csv(sim_path, parse_dates=['timestamp'])
             
-            # Convert date columns for trades and simulation data
-            self.trades_df['entry_time'] = pd.to_datetime(self.trades_df['entry_time'])
-            self.trades_df['exit_time'] = pd.to_datetime(self.trades_df['exit_time'])
-            self.sim_df['timestamp'] = pd.to_datetime(self.sim_df['timestamp'])
-
-            # --- THE DEFINITIVE FIX FOR THE EQUITY CURVE ---
-            # Reconstruct the equity DataFrame correctly.
-            # The timestamps should come from the simulation data, as the equity curve
-            # corresponds to the bars that were actually simulated.
-            equity_values = equity_data.iloc[:, 0].values
-            # The number of equity points matches the number of simulated bars
-            num_simulated_bars = len(self.sim_df)
-            # The equity curve starts from the first bar of the simulation
-            self.equity_df = pd.DataFrame({
-                'timestamp': self.sim_df['timestamp'].iloc[:len(equity_values)],
-                'equity': equity_values
-            })
-
-            print("All necessary data for plotting is ready.")
-            self.data_loaded = True
-
+            # Reconstruct equity curve with correct timestamps
+            self.equity_df['timestamp'] = sim_df_raw['timestamp'].iloc[:len(self.equity_df)]
+            self.sim_df = sim_df_raw
+            return True
         except FileNotFoundError as e:
             print(f"ERROR: A required file for plotting was not found: {e}")
-            print("Please ensure you have run the backtest_agent.py script successfully.")
-        except Exception as e:
-            print(f"An unexpected error occurred during data loading: {e}")
+            return False
 
-    # --- Helper functions (no changes) ---
-    def _plot_hourly_histogram(self, df: pd.DataFrame, title: str, filename: str):
-        if df.empty: return
-        df['hour'] = df['exit_time'].dt.hour
-        plt.figure(figsize=(12, 7)); df.groupby('hour').size().plot(kind='bar', color='#4c72b0')
-        plt.title(title, fontsize=16); plt.xlabel('Hour of the Day'); plt.ylabel('Number of Trades')
-        plt.xticks(rotation=0); plt.tight_layout(); plt.savefig(self.plot_dir / filename); plt.close()
-
-    def _plot_daily_histogram(self, df: pd.DataFrame, title: str, filename: str):
-        if df.empty: return
-        df['day'] = df['exit_time'].dt.dayofweek
-        day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-        plt.figure(figsize=(12, 7)); df.groupby('day').size().reindex(range(7), fill_value=0).plot(kind='bar', color='#55a868')
-        plt.title(title, fontsize=16); plt.xlabel('Day of the Week'); plt.ylabel('Number of Trades')
-        plt.xticks(range(7), day_names, rotation=0); plt.tight_layout(); plt.savefig(self.plot_dir / filename); plt.close()
-
-    # --- Main plotting functions ---
-    def plot_equity_curve_simple(self):
-        plt.figure(figsize=(15, 8))
-        # Use the corrected self.equity_df
-        plt.plot(self.equity_df['timestamp'], self.equity_df['equity'], label='Equity', color='teal', linewidth=2.5)
-        
+    def plot_equity_curve(self):
+        """ Plots the main equity curve against a Buy & Hold benchmark. """
+        plt.style.use('seaborn-v0_8-whitegrid')
+        fig, ax = plt.subplots(figsize=(15, 8))
+        ax.plot(self.equity_df['timestamp'], self.equity_df['equity'], label='Hierarchical Squad Equity', color='navy', linewidth=2)
         initial_price = self.sim_df['close'].iloc[0]
         buy_hold_equity = self.sim_df['close'] * (self.equity_df['equity'].iloc[0] / initial_price)
-        plt.plot(self.sim_df['timestamp'], buy_hold_equity, label='Buy & Hold Benchmark', linestyle='--', color='gray', linewidth=2)
+        ax.plot(self.sim_df['timestamp'], buy_hold_equity, label='Buy & Hold Benchmark', linestyle='--', color='gray', linewidth=1.5)
+        ax.set_title(f'Squad Performance: Equity Curve vs. Benchmark{self.results_suffix}', fontsize=18)
+        ax.set_xlabel('Date'); ax.set_ylabel('Portfolio Value ($)'); ax.legend()
+        plt.savefig(self.plot_dir / "equity_curve.png"); plt.close()
+
+    def plot_hourly_performance(self):
+        """ Plots profitable and losing trades by hour of the day. """
+        if self.trades_df.empty: return
+        self.trades_df['hour'] = self.trades_df['exit_time'].dt.hour
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 7), sharey=True)
+        sns.countplot(data=self.trades_df[self.trades_df['net_profit'] > 0], x='hour', ax=ax1, color='green')
+        ax1.set_title('Profitable Trades by Hour'); ax1.set_xlabel('Hour of Day'); ax1.set_ylabel('Number of Trades')
+        sns.countplot(data=self.trades_df[self.trades_df['net_profit'] <= 0], x='hour', ax=ax2, color='red')
+        ax2.set_title('Losing Trades by Hour'); ax2.set_xlabel('Hour of Day'); ax2.set_ylabel('')
+        plt.suptitle('Hourly Trading Performance', fontsize=16); plt.tight_layout()
+        plt.savefig(self.plot_dir / "hourly_performance.png"); plt.close()
+
+    def plot_daily_performance(self):
+        """ Plots profitable and losing trades by day of the week. """
+        if self.trades_df.empty: return
+        self.trades_df['day'] = self.trades_df['exit_time'].dt.dayofweek
+        day_names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 7), sharey=True)
+        sns.countplot(data=self.trades_df[self.trades_df['net_profit'] > 0], x='day', ax=ax1, color='green', order=range(7))
+        ax1.set_title('Profitable Trades by Day'); ax1.set_xticklabels(day_names)
+        sns.countplot(data=self.trades_df[self.trades_df['net_profit'] <= 0], x='day', ax=ax2, color='red', order=range(7))
+        ax2.set_title('Losing Trades by Day'); ax2.set_xticklabels(day_names)
+        plt.suptitle('Daily Trading Performance', fontsize=16); plt.tight_layout()
+        plt.savefig(self.plot_dir / "daily_performance.png"); plt.close()
         
-        plt.title('Agent Performance: Equity Curve vs. Buy & Hold', fontsize=16); plt.xlabel('Date'); plt.ylabel('Portfolio Value ($)')
-        plt.grid(True, which='both', linestyle='--', linewidth=0.5); plt.legend(); plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-        plt.gcf().autofmt_xdate(); plt.tight_layout(); plt.savefig(self.plot_dir / "equity_curve.png"); plt.close()
+    def plot_specialist_squad_report(self):
+        """
+        THE STRATEGIC REPORT: Analyzes and visualizes the performance of each
+        individual specialist agent in the squad.
+        """
+        if self.trades_df.empty or 'regime' not in self.trades_df.columns:
+            print("Cannot generate squad report: 'regime' column not found in trades log.")
+            return
+            
+        logger = get_logger(__name__)
+        logger.info("Generating Specialist Squad Performance Report...")
 
-    def plot_performance_metrics(self):
-        from utils.metrics import calculate_performance_metrics
-        performance_stats = calculate_performance_metrics(self.equity_df['equity'])
-        metrics = {'Sharpe Ratio': performance_stats['sharpe_ratio'], 'Sortino Ratio': performance_stats['sortino_ratio'],
-                   'Calmar Ratio': performance_stats['calmar_ratio'], 'Max Drawdown': performance_stats['max_drawdown']}
-        plt.figure(figsize=(10, 6))
-        bars = plt.bar(metrics.keys(), metrics.values(), color=['#2a7e78', '#64a6a1', '#9bc2c0', '#d95f54'])
-        plt.title('Key Performance Metrics', fontsize=16); plt.ylabel('Value')
-        for bar in bars:
-            yval = bar.get_height()
-            plt.text(bar.get_x() + bar.get_width()/2.0, yval, f'{yval:.2f}', ha='center', va='bottom')
-        plt.tight_layout(); plt.savefig(self.plot_dir / "performance_metrics.png"); plt.close()
+        # Calculate metrics for each specialist
+        squad_performance = self.trades_df.groupby('regime')['net_profit'].agg(
+            total_pnl='sum',
+            trade_count='count',
+            avg_pnl='mean',
+            win_rate=lambda x: (x > 0).mean()
+        ).reset_index()
 
-    def plot_profitable_trades_hourly(self):
-        self._plot_hourly_histogram(self.trades_df[self.trades_df['net_profit'] > 0].copy(), 'Number of Profitable Trades by Hour of Day', 'profitable_trades_hourly.png')
-
-    def plot_losing_trades_hourly(self):
-        self._plot_hourly_histogram(self.trades_df[self.trades_df['net_profit'] < 0].copy(), 'Number of Losing Trades by Hour of Day', 'losing_trades_hourly.png')
+        # Identify key contributors
+        biggest_winner_id = squad_performance.loc[squad_performance['total_pnl'].idxmax()]
+        biggest_loser_id = squad_performance.loc[squad_performance['total_pnl'].idxmin()]
+        most_active_id = squad_performance.loc[squad_performance['trade_count'].idxmax()]
         
-    def plot_profitable_trades_daily(self):
-        self._plot_daily_histogram(self.trades_df[self.trades_df['net_profit'] > 0].copy(), 'Number of Profitable Trades by Day of Week', 'profitable_trades_daily.png')
+        # --- Create the Dashboard ---
+        fig = plt.figure(figsize=(20, 15), constrained_layout=True)
+        fig.suptitle('Hierarchical Squad: Specialist Performance Report', fontsize=24)
         
-    def plot_losing_trades_daily(self):
-        self._plot_daily_histogram(self.trades_df[self.trades_df['net_profit'] < 0].copy(), 'Number of Losing Trades by Day of Week', 'losing_trades_daily.png')
+        gs = fig.add_gridspec(2, 2)
+        
+        # 1. Total Profit/Loss by Specialist
+        ax1 = fig.add_subplot(gs[0, 0])
+        sns.barplot(data=squad_performance, x='regime', y='total_pnl', ax=ax1, palette='viridis')
+        ax1.set_title('Total Net Profit by Specialist'); ax1.set_xlabel('Specialist (Regime ID)'); ax1.set_ylabel('Total PnL ($)')
 
-    def plot_detailed_equity_vs_price(self):
-        print("Generating detailed price vs. equity performance chart...")
-        fig, ax1 = plt.subplots(figsize=(20, 10)); fig.suptitle('Detailed Performance: Price Action vs. Equity Curve', fontsize=20)
-        ax1.set_xlabel('Date', fontsize=16); ax1.set_ylabel('Price (XAUUSD)', color='teal', fontsize=16)
-        ax1.plot(self.sim_df['timestamp'], self.sim_df['close'], color='teal', label='Close Price', alpha=0.8, linewidth=1.5)
-        ax1.tick_params(axis='y', labelcolor='teal')
-        buy_trades = self.trades_df[self.trades_df['type'] == 'BUY']; sell_trades = self.trades_df[self.trades_df['type'] == 'SELL']
-        ax1.plot(buy_trades['entry_time'], buy_trades['entry_price'], '^', color='green', markersize=8, label='Buy Entry')
-        ax1.plot(sell_trades['entry_time'], sell_trades['entry_price'], 'v', color='red', markersize=8, label='Sell Entry')
-        ax1.legend(loc='upper left'); ax1.grid(True, which='both', linestyle='--', linewidth=0.5)
-        ax2 = ax1.twinx(); ax2.set_ylabel('Portfolio Value ($)', color='navy', fontsize=16)
-        # Use the corrected self.equity_df
-        ax2.plot(self.equity_df['timestamp'], self.equity_df['equity'], color='navy', label='Equity Curve', linewidth=2.0)
-        ax2.tick_params(axis='y', labelcolor='navy'); ax2.legend(loc='upper right')
-        ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d %H:%M')); fig.autofmt_xdate()
-        plt.tight_layout(rect=[0, 0, 1, 0.96]); save_path = self.plot_dir / "detailed_performance_chart.png"
-        plt.savefig(save_path); plt.close(); print(f"Detailed chart saved to: {save_path}")
+        # 2. Activity Level by Specialist
+        ax2 = fig.add_subplot(gs[0, 1])
+        sns.barplot(data=squad_performance, x='regime', y='trade_count', ax=ax2, palette='coolwarm')
+        ax2.set_title('Activity Level (Number of Trades)'); ax2.set_xlabel('Specialist (Regime ID)'); ax2.set_ylabel('Trade Count')
+
+        # 3. Win Rate by Specialist
+        ax3 = fig.add_subplot(gs[1, 0])
+        sns.barplot(data=squad_performance, x='regime', y='win_rate', ax=ax3, palette='crest')
+        ax3.set_title('Win Rate by Specialist'); ax3.set_xlabel('Specialist (Regime ID)'); ax3.set_ylabel('Win Rate (%)')
+        ax3.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0%}'))
+
+        # 4. Average PnL per Trade
+        ax4 = fig.add_subplot(gs[1, 1])
+        sns.barplot(data=squad_performance, x='regime', y='avg_pnl', ax=ax4, palette='magma')
+        ax4.set_title('Average Profit/Loss per Trade'); ax4.set_xlabel('Specialist (Regime ID)'); ax4.set_ylabel('Avg PnL ($)')
+
+        plt.savefig(self.plot_dir / "specialist_squad_report.png"); plt.close()
+        logger.info(f"Squad report saved to {self.plot_dir / 'specialist_squad_report.png'}")
+
 
     def run_all_plots(self):
-        """A single function to run all available plots only if data is loaded."""
-        if not self.data_loaded:
-            print("Cannot generate plots because data was not loaded successfully.")
-            return
-
-        print("\nGenerating all plots...")
-        try:
-            self.plot_equity_curve_simple()
-            self.plot_performance_metrics()
-            self.plot_profitable_trades_hourly()
-            self.plot_losing_trades_hourly()
-            self.plot_profitable_trades_daily()
-            self.plot_losing_trades_daily()
-            self.plot_detailed_equity_vs_price()
-            print("\n✅ All plots generated successfully.")
-        except Exception as e:
-            print(f"An error occurred during plotting: {e}")
-
+        if not self.data_loaded: return
+        print("\nGenerating all strategic plots...")
+        self.plot_equity_curve()
+        self.plot_hourly_performance()
+        self.plot_daily_performance()
+        self.plot_specialist_squad_report() # Add the new report to the main call
+        print("\n✅ All plots generated successfully.")
 
 if __name__ == "__main__":
-    plotter = Plotter()
+    # To run for a specific stress test, you would pass the suffix
+    # e.g., plotter = HierarchicalPlotter(results_suffix="_stresstest_flash_crash")
+    plotter = HierarchicalPlotter()
     plotter.run_all_plots()

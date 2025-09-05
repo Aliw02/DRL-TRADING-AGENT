@@ -1,5 +1,5 @@
 # scripts/backtest_hierarchical.py
-# HIERARCHICAL SQUAD COMBAT SIMULATOR
+# FINAL, INTELLIGENCE-AWARE HIERARCHICAL SQUAD COMBAT SIMULATOR
 
 import pandas as pd
 import joblib
@@ -8,7 +8,9 @@ import sys
 import numpy as np
 import json
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+# --- Add project root to path for robust imports ---
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(PROJECT_ROOT)
 
 from stable_baselines3 import SAC
 from config import paths
@@ -17,27 +19,26 @@ from utils.logger import setup_logging, get_logger
 from utils.metrics import calculate_performance_metrics
 from utils.accelerator import DEVICE
 
-def run_hierarchical_backtest():
+def run_hierarchical_backtest(backtest_df: pd.DataFrame = None, results_suffix: str = ""):
     """
-    Executes a full backtest simulation using the hierarchical squad of specialist agents.
-    It simulates the entire command chain: classify, delegate, execute.
+    Executes a full backtest using the hierarchical squad. It now logs the
+    responsible regime for every trade, enabling advanced performance analysis.
     """
     setup_logging()
     logger = get_logger(__name__)
-    logger.info("="*80); logger.info("INITIATING HIERARCHICAL SQUAD BACKTEST"); logger.info("="*80)
+    logger.info(f"INITIATING HIERARCHICAL BACKTEST (Results suffix: '{results_suffix}')...")
 
     try:
         # --- 1. Load the Entire Specialist Squad and Command Unit ---
         agent_config = Config()
         squad = {}
-        logger.info("Loading Command Unit (Regime Classifier and Scaler)...")
+        logger.info("Loading Command Unit and Specialist Squad...")
         squad['classifier'] = joblib.load(paths.FINAL_MODEL_DIR / "regime_gmm_model.joblib")
         squad['scaler'] = joblib.load(paths.FINAL_MODEL_DIR / "regime_robust_scaler.joblib")
         
         with open(paths.FINAL_MODEL_DIR / "regime_config.json", 'r') as f:
             num_regimes = json.load(f)['optimal_n_clusters']
         
-        logger.info(f"Loading {num_regimes} specialist agents...")
         squad['specialists'] = {}
         for i in range(num_regimes):
             model_path = paths.FINAL_MODEL_DIR / f"specialist_regime_{i}/models/best_model.zip"
@@ -45,9 +46,11 @@ def run_hierarchical_backtest():
                 squad['specialists'][i] = SAC.load(model_path, device=DEVICE)
 
         # --- 2. Prepare Unseen Data ---
-        logger.info(f"Loading and processing unseen data from: {paths.BACKTEST_DATA_FILE}")
-        # Using a large, recent chunk of the main dataset for a robust backtest
-        backtest_df = pd.read_parquet(paths.FINAL_ENRICHED_DATA_FILE).tail(100000) 
+        if backtest_df is None:
+            logger.info(f"Loading standard unseen data for backtest...")
+            backtest_df = pd.read_parquet(paths.FINAL_ENRICHED_DATA_FILE).tail(100000)
+        else:
+            logger.info("Using custom data for stress testing scenario...")
         
         # --- 3. Simulation Core ---
         initial_balance = agent_config.get('environment.initial_balance')
@@ -58,7 +61,6 @@ def run_hierarchical_backtest():
         sequence_length = agent_config.get('environment.sequence_length')
         
         regime_features = ['adx', 'bb_width', 'roc_norm', 'rsi_x_adx', 'atr']
-        # The specialist was trained on features WITHOUT the regime probabilities
         specialist_feature_cols = [col for col in backtest_df.columns if 'regime_prob' not in col and col not in ['open', 'high', 'low', 'close', 'time', 'timestamp', 'regime']]
 
         logger.info("Starting hierarchical simulation loop...")
@@ -69,52 +71,64 @@ def run_hierarchical_backtest():
             current_regime_features = squad['scaler'].transform(current_bar[regime_features].values.reshape(1, -1))
             current_regime = squad['classifier'].predict(current_regime_features)[0]
 
-            # --- TACTICAL STEP: Activate the correct specialist ---
+            # --- TACTICAL STEP: Activate specialist and get action ---
             active_specialist = squad['specialists'].get(current_regime)
-            action_value = 0.0 # Default to a neutral action (HOLD)
+            action_value = 0.0
 
-            if not active_specialist:
-                logger.debug(f"No specialist for Regime {current_regime}. Defaulting to HOLD.")
-            else:
-                # Prepare observation for the specialist
+            if active_specialist:
                 obs_df = backtest_df.iloc[i - sequence_length + 1 : i + 1]
                 obs_features = obs_df[specialist_feature_cols].values
-                
-                current_pos_size = 1.0 if open_position else 0.0
-                position_feature = np.full((sequence_length, 1), current_pos_size, dtype=np.float32)
-                
-                observation = np.expand_dims(np.concatenate([obs_features, position_feature], axis=1), axis=0)
+                pos_size = 1.0 if open_position else 0.0
+                pos_feature = np.full((sequence_length, 1), pos_size, dtype=np.float32)
+                observation = np.expand_dims(np.concatenate([obs_features, pos_feature], axis=1), axis=0)
                 action, _ = active_specialist.predict(observation, deterministic=True)
                 action_value = action[0][0]
 
-            # --- EXECUTION STEP: (This is a simplified trade logic for demonstration) ---
-            # A full implementation would use the advanced logic from your original backtester
+            # --- EXECUTION STEP with INTELLIGENCE LOGGING ---
             BUY_THRESHOLD, SELL_THRESHOLD = 0.5, -0.5
-            if not open_position and action_value > BUY_THRESHOLD:
-                open_position = {'type': 'BUY', 'entry_price': current_bar['open']}
-                trades.append({'time': current_bar['timestamp'], 'action': 'BUY', 'price': current_bar['open']})
-
-            elif open_position and action_value < SELL_THRESHOLD:
+            if open_position and action_value < SELL_THRESHOLD:
                 pnl = current_bar['open'] - open_position['entry_price']
                 equity += pnl
-                trades.append({'time': current_bar['timestamp'], 'action': 'SELL', 'price': current_bar['open']})
+                trades.append({
+                    'entry_time': open_position['entry_time'],
+                    'exit_time': current_bar['timestamp'],
+                    'type': open_position['type'],
+                    'entry_price': open_position['entry_price'],
+                    'exit_price': current_bar['open'],
+                    'net_profit': pnl,
+                    # --- CRITICAL INTELLIGENCE DATA POINT ---
+                    'regime': open_position['regime_at_entry']
+                })
                 open_position = None
+
+            if not open_position and action_value > BUY_THRESHOLD:
+                open_position = {
+                    'type': 'BUY',
+                    'entry_price': current_bar['open'],
+                    'entry_time': current_bar['timestamp'],
+                    # --- CRITICAL INTELLIGENCE DATA POINT ---
+                    'regime_at_entry': current_regime
+                }
             
-            # --- Update Equity Curve ---
+            # Update Equity Curve
             current_equity = equity
             if open_position:
                 current_equity += (current_bar['close'] - open_position['entry_price'])
             equity_curve.append(current_equity)
 
         # --- 4. Save and Display Final Results ---
-        logger.info("Hierarchical backtest complete. Saving results...")
-        pd.DataFrame(trades).to_csv(paths.RESULTS_DIR / "hierarchical_backtest_trades.csv", index=False)
-        pd.Series(equity_curve).to_csv(paths.RESULTS_DIR / "hierarchical_backtest_equity.csv", index=False, header=['equity'])
+        logger.info("Hierarchical backtest complete. Saving intelligence logs...")
+        trades_df = pd.DataFrame(trades)
+        trades_df.to_csv(paths.RESULTS_DIR / f"hierarchical_backtest_trades{results_suffix}.csv", index=False)
+        pd.Series(equity_curve).to_csv(paths.RESULTS_DIR / f"hierarchical_backtest_equity{results_suffix}.csv", index=False, header=['equity'])
         
-        performance = calculate_performance_metrics(pd.Series(equity_curve))
-        logger.info("\n--- HIERARCHICAL BACKTEST PERFORMANCE ---")
-        logger.info(performance)
-        logger.info("------------------------------------")
+        if not trades_df.empty:
+            performance = calculate_performance_metrics(pd.Series(equity_curve))
+            logger.info("\n--- HIERARCHICAL BACKTEST PERFORMANCE ---")
+            logger.info(performance)
+            logger.info("------------------------------------")
+        else:
+            logger.warning("No trades were executed during the backtest.")
 
     except Exception as e:
         logger.error(f"A critical error occurred during hierarchical backtesting: {e}", exc_info=True)
