@@ -1,0 +1,9 @@
+# config_gpu.yaml (GPU-SPECIFIC SETTINGS)
+
+# These settings will override the base config when a GPU is detected.
+training:
+  learning_rate: 0.0001
+  
+  # GPU-EFFICIENT BATCHED TRAINING STRATEGY
+  train_freq: [1024, "step"]
+  gradient_steps: -1

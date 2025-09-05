@@ -1,35 +1,30 @@
 # config/config_sac.yaml
-# FINAL AND GUARANTEED "BATCH TRAINING" CONFIGURATION
+# TACTICAL CONFIGURATION FOR RESOURCE-CONSTRAINED ENVIRONMENTS (Google Colab)
 
 training:
-  learning_rate: 0.0003
-  buffer_size: 75000
-  batch_size: 128
+  learning_rate: 0.00015          # Slightly higher LR for faster initial learning
+  buffer_size: 500000             # Reduced buffer to conserve RAM
+  batch_size: 512                 # Large batch size is efficient on GPUs
   tau: 0.005
   gamma: 0.99
-  
-  # --- THE GUARANTEED FIX: CHANGE THE TRAINING STRATEGY ---
-  # Instead of training after every step, we collect a large chunk of data first,
-  # then perform all the training updates at once. This is vastly more efficient.
-  
-  # Collect 1024 steps from the environment...
-  train_freq: [1024, "step"] # <<-- THE MOST CRITICAL CHANGE IN THE ENTIRE PROJECT
-  
-  # ...then perform 1024 gradient updates.
-  gradient_steps: -1 # <<-- Tells the model to match gradient_steps to train_freq (i.e., 1024)
-  
-  learning_starts: 10000 
-  
+
+  # Batch-style training for maximum GPU efficiency
+  train_freq: [2048, "step"]
+  gradient_steps: 1024
+  learning_starts: 5000
+
   walk_forward:
     n_splits: 5
     min_train_size: 40000
     test_size: 30000
-    timesteps_per_split: 150000
+    # --- CRITICAL ADJUSTMENT FOR COLAB ---
+    timesteps_per_split: 75000    # Reduced timesteps to target ~1.5 hours per split
+    eval_freq: 5000               # Evaluate more frequently on shorter runs
 
   fine_tuning:
     recent_data_years: 2.5
-    total_timesteps: 200000
-    learning_rate: 0.00001
+    total_timesteps: 100000       # Reduced for faster fine-tuning
+    learning_rate: 0.00002
 
 environment:
   initial_balance: 10000

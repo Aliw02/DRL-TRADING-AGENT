@@ -1,0 +1,9 @@
+# config_cpu.yaml (CPU-SPECIFIC SETTINGS)
+
+# These settings will override the base config when only a CPU is detected.
+training:
+  learning_rate: 0.0001
+  
+  # CPU-FRIENDLY CONTINUOUS TRAINING STRATEGY
+  train_freq: [1, "step"]
+  gradient_steps: 8

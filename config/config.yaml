@@ -1,37 +1,33 @@
+# config/config.yaml (BASE CONFIGURATION)
+
+# These settings are shared between CPU and GPU
 training:
-  total_timesteps: 1000000
-  learning_rate: 0.0001
-  n_steps: 4096
+  buffer_size: 75000
   batch_size: 128
-  n_epochs: 10
+  tau: 0.005
   gamma: 0.99
-  gae_lambda: 0.95
-  clip_range: 0.2
-  ent_coef: 0.01
-
-  # --- CRITICAL: Enable Vectorized Environments to maximize GPU usage ---
-  n_envs: 8 # Use 8 parallel environments (a good number for Kaggle CPUs)
-
-  # Enhanced walk-forward settings for large dataset
+  learning_starts: 10000 
+  
   walk_forward:
-    n_splits: 10
-    min_train_size: 1000000
-    test_size: 250000
+    n_splits: 5
+    min_train_size: 40000
+    test_size: 30000
+    timesteps_per_split: 150000
 
-# Environment parameters
+  fine_tuning:
+    recent_data_years: 2.5
+    total_timesteps: 200000
+    learning_rate: 0.00001
+
 environment:
   initial_balance: 10000
-  sequence_length: 150 # Increased sequence length for Transformer
+  sequence_length: 60
+  commission_pct: 0.0005
+  turnover_penalty: 0.001
 
-# Model parameters for the Hybrid CNN-Transformer
 model:
   features_dim: 256
   cnn_out_channels: 64
   transformer_n_heads: 4
   transformer_n_layers: 2
-
-# Logging parameters
-logging:
-  level: "INFO"
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  file: "results/logs/trading_agent.log"
+  transformer_dropout: 0.1
