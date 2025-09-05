@@ -1,12 +1,12 @@
 # envs/trading_env.py
-# FINAL, OBJECTIVE-DRIVEN, AND STRATEGICALLY-AWARE TRADING ENVIRONMENT
+# FINAL, OBJECTIVE-DRIVEN, AND STRATEGICALLY-SOUND TRADING ENVIRONMENT
 
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import pandas as pd
 from utils.logger import get_logger
-from config.init import config
+from config.init import Config
 
 logger = get_logger(__name__)
 
@@ -16,22 +16,27 @@ class TradingEnv(gym.Env):
     def __init__(self, df: pd.DataFrame):
         super(TradingEnv, self).__init__()
         
-        self.df = df.reset_index(drop=True)
-        self.max_steps = len(self.df) - 1
+        # --- CRITICAL FIX: Define features and arrays BEFORE using them ---
+        self.feature_cols = [col for col in df.columns if col not in ['open', 'high', 'low', 'close', 'time', 'timestamp']]
+        self.features_array = df[self.feature_cols].values.astype(np.float32)
+        self.price_array = df['close'].values.astype(np.float32)
+        
+        self.max_steps = len(df) - 1
         
         # --- Load strategic parameters from the master configuration ---
-        self.initial_balance = config.get('environment.initial_balance', 10000)
-        self.sequence_length = config.get('environment.sequence_length', 30)
-        self.commission_pct = config.get('environment.commission_pct', 0.0005)
+        agent_config = Config()
+        self.initial_balance = agent_config.get('environment.initial_balance', 10000)
+        self.sequence_length = agent_config.get('environment.sequence_length', 30)
+        self.commission_pct = agent_config.get('environment.commission_pct', 0.0005)
         
         # --- NEW: Load strategic objective parameters ---
-        self.monthly_profit_target = config.get('environment.monthly_profit_target_pct', 0.15)
-        self.monthly_bonus = config.get('environment.monthly_bonus_reward', 150.0)
-        self.steps_per_month = config.get('environment.steps_per_month', 2016)
+        self.monthly_profit_target = agent_config.get('environment.monthly_profit_target_pct', 0.15)
+        self.monthly_bonus = agent_config.get('environment.monthly_bonus_reward', 150.0)
+        self.steps_per_month = agent_config.get('environment.steps_per_month', 2016)
         
+        # --- Define action and observation spaces ---
         self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
         
-        self.feature_cols = [col for col in df.columns if col not in ['open', 'high', 'low', 'close', 'time', 'timestamp']]
         obs_dim = self.features_array.shape[1] + 2 # Features + position_size, unrealized_pnl_pct
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, 
@@ -52,7 +57,7 @@ class TradingEnv(gym.Env):
         
         # --- NEW: Initialize trackers for the monthly bonus ---
         self.month_start_step = self.current_step
-        self.month_start_balance = self.initial_balance
+        self.month_start_balance = self.balance
         
         return self._next_observation(), {}
     
@@ -73,7 +78,6 @@ class TradingEnv(gym.Env):
         return obs, reward, done, False, info
 
     def _update_unrealized_pnl(self):
-        # ... (This function remains unchanged)
         if self.position_size != 0:
             current_price = self.price_array[self.current_step]
             pnl = (current_price - self.entry_price) * self.position_size
@@ -84,35 +88,30 @@ class TradingEnv(gym.Env):
     def _get_reward(self, realized_pnl):
         """
         OBJECTIVE-DRIVEN REWARD DOCTRINE.
-        Includes a decisive bonus for meeting long-term performance targets.
+        Implements all specified strategic conditions.
         """
-        # --- 1. CONTINUOUS PROFIT/LOSS (Shaping Reward) ---
+        # 1. CONTINUOUS PROFIT/LOSS (Shaping Reward)
         shaping_reward = np.tanh(self.unrealized_pnl_pct * 10)
         
-        # --- 2. DECISIVE OUTCOME (Event Reward) ---
+        # 2. DECISIVE OUTCOME (Event Reward)
         realized_reward = (realized_pnl / self.initial_balance) * 100
         
-        # --- 3. STRATEGIC OBJECTIVE (Performance Bonus) ---
+        # 3. STRATEGIC OBJECTIVE (Performance Bonus)
         bonus_reward = 0.0
-        # Check if a month has passed
         if self.current_step >= self.month_start_step + self.steps_per_month:
-            # Check if the profit target was met
             profit_pct = (self.balance / self.month_start_balance) - 1
             if profit_pct >= self.monthly_profit_target:
                 bonus_reward = self.monthly_bonus
                 logger.info(f"🏆 STRATEGIC OBJECTIVE MET! Awarding bonus of {bonus_reward}")
             
-            # Reset the trackers for the next month
             self.month_start_step = self.current_step
             self.month_start_balance = self.balance
         
-        # --- FINAL REWARD: The sum of all reward components ---
         reward = shaping_reward + realized_reward + bonus_reward
         
         return float(reward) if np.isfinite(reward) else -10.0
 
     def _take_action(self, target_position_size):
-        # ... (This function remains unchanged)
         current_price = self.price_array[self.current_step]
         realized_pnl = 0.0
         if (self.position_size > 0 and target_position_size <= 0) or \
@@ -132,7 +131,6 @@ class TradingEnv(gym.Env):
         return realized_pnl
             
     def _next_observation(self):
-        # ... (This function remains unchanged)
         start_idx = self.current_step - self.sequence_length + 1
         end_idx = self.current_step + 1
         features = self.features_array[start_idx:end_idx]
