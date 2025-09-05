@@ -23,14 +23,14 @@ class TradingEnv(gym.Env):
         
         self.max_steps = len(df) - 1
         
-        # Load strategic parameters
+        # Load strategic parameters from the master configuration
         self.initial_balance = config.get('environment.initial_balance', 10000)
-        self.sequence_length = config.get('environment.sequence_length', 60)
+        self.sequence_length = config.get('environment.sequence_length', 30)
         self.commission_pct = config.get('environment.commission_pct', 0.0005) # Represents spread + commission
         
         self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
         
-        obs_dim = self.features_array.shape[1] + 1 # Market features + current position size
+        obs_dim = self.features_array.shape[1] + 2 # Features + position_size, unrealized_pnl_pct
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, 
             shape=(self.sequence_length, obs_dim), 
@@ -42,99 +42,112 @@ class TradingEnv(gym.Env):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.current_step = self.sequence_length
-        self.portfolio_value = self.initial_balance
-        self.cash = self.initial_balance
-        self.position_size = 0.0
+        self.balance = self.initial_balance
+        self.entry_price = 0.0
+        self.position_size = 0.0 # -1 (Short) to 1 (Long)
         self.units_held = 0.0
-        self.max_portfolio_value = self.initial_balance
+        self.unrealized_pnl_pct = 0.0
         
         return self._next_observation(), {}
     
     def step(self, action):
         target_position_size = float(action[0])
         
-        # --- REWARD LOGIC: Capture realized PnL from closing a position ---
         realized_pnl = self._take_action(target_position_size)
         
         self.current_step += 1
-        self._update_portfolio_value()
+        self._update_unrealized_pnl()
         
         reward = self._get_reward(realized_pnl)
         
-        done = (self.portfolio_value < self.initial_balance * 0.5) or (self.current_step >= self.max_steps)
+        done = (self.balance < self.initial_balance * 0.5) or (self.current_step >= self.max_steps)
 
         obs = self._next_observation()
-        info = {'equity': self.portfolio_value, 'position_size': self.position_size}
+        info = {'equity': self.balance + (self.unrealized_pnl_pct * self.entry_price * abs(self.units_held))}
         
         return obs, reward, done, False, info
 
-    def _update_portfolio_value(self):
-        current_price = self.price_array[self.current_step]
-        position_market_value = self.units_held * current_price
-        self.portfolio_value = self.cash + position_market_value
-        self.max_portfolio_value = max(self.max_portfolio_value, self.portfolio_value)
+    def _update_unrealized_pnl(self):
+        """ Calculates the unrealized Profit/Loss for the currently open position. """
+        if self.position_size != 0:
+            current_price = self.price_array[self.current_step]
+            pnl = (current_price - self.entry_price) * self.position_size
+            # We use percentage PnL to keep the reward signal stable
+            self.unrealized_pnl_pct = (pnl / self.entry_price) if self.entry_price > 1e-9 else 0.0
+        else:
+            self.unrealized_pnl_pct = 0.0
 
     def _get_reward(self, realized_pnl):
         """
-        STRATEGICALLY-SOUND AND PERFORMANCE-OPTIMIZED REWARD FUNCTION.
-        It provides clear, realistic signals without compromising speed.
+        THE COMMANDER'S DOCTRINE REWARD FUNCTION.
+        This function implements the exact strategy you described.
         """
-        # --- PRIMARY OBJECTIVE: REWARD REALIZED PROFIT ---
-        # The agent is now rewarded ONLY when it closes a trade profitably.
-        # This is a clear, sparse, and powerful signal. We use percentage PnL.
-        pnl_reward = realized_pnl / self.initial_balance
+        # --- 1. CONTINUOUS PROFIT/LOSS (Shaping Reward) ---
+        # At every step, the agent gets a small reward for holding a winner
+        # and a small penalty for holding a loser. This teaches trend-following.
+        # We use tanh to keep the signal bounded and stable.
+        shaping_reward = np.tanh(self.unrealized_pnl_pct * 10)
         
-        # --- DEFENSIVE PENALTY: UNREALIZED DRAWDOWN ---
-        # At every step, the agent is penalized for the current drawdown of the whole portfolio.
-        # This teaches capital preservation continuously.
-        drawdown = (self.max_portfolio_value - self.portfolio_value) / self.max_portfolio_value
-        drawdown_penalty = drawdown ** 2 # Punish large drawdowns severely
+        # --- 2. DECISIVE OUTCOME (Event Reward) ---
+        # A large, decisive reward or penalty is given ONLY when a trade is closed.
+        # This is the primary driver for learning profitability.
+        # The reward is proportional to the percentage PnL.
+        realized_reward = (realized_pnl / self.initial_balance) * 100 # Scaled for significance
         
-        # --- FINAL REWARD: A realistic trading signal ---
-        # The agent must generate enough profit to overcome the constant pressure of drawdown.
-        reward = pnl_reward - drawdown_penalty
+        # --- FINAL REWARD: The sum of continuous guidance and decisive outcomes ---
+        reward = shaping_reward + realized_reward
         
-        return float(reward) if np.isfinite(reward) else -1.0
+        # Safety net to prevent system instability
+        return float(reward) if np.isfinite(reward) else -10.0 # Severe penalty for invalid states
 
     def _take_action(self, target_position_size):
-        """
-        Executes trades and now returns the realized PnL from any closing action.
-        """
+        """ Executes trades and returns the REALIZED PnL from any closing action. """
         current_price = self.price_array[self.current_step]
-        if current_price <= 1e-9: return 0.0
-
         realized_pnl = 0.0
-        current_position_value = self.units_held * current_price
 
-        # --- Logic for Closing or Reducing a Position ---
-        position_change = target_position_size - self.position_size
-        
-        # If the agent wants to close or flip its position, calculate realized PnL
-        if (self.position_size > 0 and target_position_size <= 0) or \
-           (self.position_size < 0 and target_position_size >= 0):
+        # --- ACTION: CLOSE or REDUCE POSITION ---
+        # This is triggered if we have a position and the agent wants to exit or flip.
+        if (self.position_size > 0 and target_position_size < self.position_size) or \
+           (self.position_size < 0 and target_position_size > self.position_size):
             
-            # Realize PnL on the entire position
-            self.cash += current_position_value * (1 - self.commission_pct)
-            realized_pnl = self.cash - self.balance # This captures the PnL
-            self.balance = self.cash
-            self.units_held = 0
+            # Close the existing position to realize PnL
+            final_value = (self.units_held * current_price)
+            realized_pnl = final_value - (self.entry_price * self.units_held)
             
-        # --- Logic for Opening or Increasing a Position ---
-        target_units = (self.portfolio_value * target_position_size) / current_price
-        units_to_trade = target_units - self.units_held
-        
-        if abs(units_to_trade) > 1e-6:
-            trade_cost = abs(units_to_trade * current_price)
-            commission = trade_cost * self.commission_pct
-            self.cash -= (units_to_trade * current_price) + commission
-            self.units_held += units_to_trade
-        
-        self.position_size = (self.units_held * current_price) / self.portfolio_value if self.portfolio_value > 1e-9 else 0
+            # Deduct commission from the cash balance
+            commission = abs(final_value) * self.commission_pct
+            self.balance += realized_pnl - commission
+            
+            # Reset position state
+            self.position_size, self.units_held, self.entry_price = 0.0, 0.0, 0.0
+
+        # --- ACTION: OPEN or INCREASE POSITION ---
+        # This is triggered if we are not fully invested in the target direction.
+        if abs(target_position_size) > abs(self.position_size) and abs(target_position_size) > 0.1:
+            if self.position_size == 0.0: # New entry
+                self.entry_price = current_price
+
+            # Calculate the value to invest
+            trade_value = self.balance * (target_position_size - self.position_size)
+            commission = abs(trade_value) * self.commission_pct
+            self.balance -= commission
+            
+            # Update units held
+            self.units_held += trade_value / current_price
+            self.position_size = (self.units_held * current_price) / self.balance if self.balance > 1e-9 else 0.0
+
         return realized_pnl
             
     def _next_observation(self):
         start_idx = self.current_step - self.sequence_length + 1
         end_idx = self.current_step + 1
+        
         features = self.features_array[start_idx:end_idx]
-        position_feature = np.full((self.sequence_length, 1), self.position_size, dtype=np.float32)
-        return np.concatenate([features, position_feature], axis=1)
+        
+        # Agent is now aware of its position and current trade performance
+        state_features = np.array([
+            [self.position_size] * self.sequence_length,
+            [self.unrealized_pnl_pct] * self.sequence_length
+        ]).T
+
+        return np.concatenate([features, state_features], axis=1)
