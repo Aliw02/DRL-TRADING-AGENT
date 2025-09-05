@@ -38,3 +38,6 @@ model:
   transformer_n_heads: 4
   transformer_n_layers: 2
   transformer_dropout: 0.1
+
+specialist_training:
+  min_samples_per_regime: 5000

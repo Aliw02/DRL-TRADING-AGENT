@@ -50,7 +50,7 @@ def create_regime_datasets(full_df: pd.DataFrame, regime_classifier, regime_scal
 def run_specialist_training_pipeline(config_path: str):
     """
     Main pipeline to forge a dedicated specialist agent for each market regime.
-    This orchestrates the entire HRL training process.
+    It now uses a flexible, config-driven threshold for data requirements.
     """
     setup_logging()
     logger = get_logger(__name__)
@@ -59,12 +59,15 @@ def run_specialist_training_pipeline(config_path: str):
     logger.info("="*80)
 
     try:
-        # --- 1. Load Master Artifacts ---
-        logger.info("Loading master artifacts: Enriched data, regime classifier, and scaler...")
+        # --- 1. Load Master Artifacts & Configuration ---
         agent_config = Config(config_path=config_path)
         full_df = pd.read_parquet(paths.FINAL_ENRICHED_DATA_FILE)
         regime_model = joblib.load(paths.FINAL_MODEL_DIR / "regime_gmm_model.joblib")
         regime_scaler = joblib.load(paths.FINAL_MODEL_DIR / "regime_robust_scaler.joblib")
+        
+        # --- CRITICAL FIX: Load the minimum sample requirement from the config ---
+        min_samples_requirement = agent_config.get('specialist_training.min_samples_per_regime', 5000)
+        logger.info(f"Strategic Directive: Minimum samples per regime set to {min_samples_requirement}.")
 
         # --- 2. Create Regime-Specific Datasets ---
         regime_datasets = create_regime_datasets(full_df, regime_model, regime_scaler)
@@ -82,9 +85,10 @@ def run_specialist_training_pipeline(config_path: str):
                 continue
 
             regime_df = regime_datasets[regime_id]
-            # Minimum data requirement for a meaningful training regimen
-            if len(regime_df) < 20000:
-                logger.warning(f"Skipping Regime {regime_id} due to insufficient data ({len(regime_df)} samples).")
+            
+            # --- CRITICAL FIX: Use the flexible requirement from the config ---
+            if len(regime_df) < min_samples_requirement:
+                logger.warning(f"Skipping Regime {regime_id} due to insufficient data ({len(regime_df)} samples, requirement is {min_samples_requirement}).")
                 continue
 
             # Partition the specialist's data into training and evaluation sets
@@ -92,14 +96,14 @@ def run_specialist_training_pipeline(config_path: str):
             train_df = regime_df.iloc[:train_size]
             eval_df = regime_df.iloc[train_size:]
 
-            # Deploy the standardized training protocol on the specialized dataset
+            # Deploy the standardized training protocol
             train_one_segment(
                 train_df=train_df,
                 eval_df=eval_df,
                 save_path_prefix=str(specialist_save_dir),
                 config=agent_config
             )
-            gc.collect() # Proactively manage memory between heavy training runs
+            gc.collect()
 
         logger.info("\n" + "="*80)
         logger.info("✅ ALL SPECIALIST AGENT TRAINING PROTOCOLS COMPLETE.")
