@@ -25,12 +25,6 @@ training:
     total_timesteps: 100000
     learning_rate: 0.00002
 
-environment:
-  initial_balance: 10000
-  # --- STRATEGIC ADJUSTMENT: Reduce sequence length ---
-  sequence_length: 30 # A shorter sequence is much faster to process
-  commission_pct: 0.0005
-
 model:
   features_dim: 256
   # CNN channels can be slightly increased as the model is simpler
@@ -38,3 +32,16 @@ model:
 
 specialist_training:
   min_samples_per_regime: 5000
+
+environment:
+  initial_balance: 10000
+  sequence_length: 30
+  commission_pct: 0.0005
+  
+  # --- NEW STRATEGIC OBJECTIVE PARAMETERS ---
+  # Defines the target for the monthly performance bonus.
+  monthly_profit_target_pct: 0.15  # 15% target
+  monthly_bonus_reward: 150.0      # A massive, decisive bonus reward
+  
+  # Assuming 15-minute timeframe: 4 candles/hour * 24 hours * 21 trading days
+  steps_per_month: 2016
