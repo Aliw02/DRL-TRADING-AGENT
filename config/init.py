@@ -1,53 +1,43 @@
-# config/init.py (DYNAMIC CONFIG LOADER)
+# config/init.py
+# FINAL, FLEXIBLE, AND PRODUCTION-GRADE CONFIGURATION LOADER
+
 import yaml
 from pathlib import Path
-import sys, os
-
-# Add project root to path to allow imports
-sys.path.append(str(Path(__file__).parent.parent))
-from utils.accelerator import DEVICE # Import the device detector
 
 class Config:
-    def __init__(self, base_config_path: str = 'config/config.yaml'):
-        self.base_config_path = Path(base_config_path)
-        self.config = self._load_and_merge_configs()
+    """
+    A centralized and flexible configuration management class.
+    It is instantiated with a specific config file path, allowing different
+    configurations (e.g., for SAC, PPO, testing) to be managed seamlessly.
+    """
 
-    def _load_yaml(self, path):
-        if not path.is_file():
-            raise FileNotFoundError(f"Config file not found at: {path}")
-        with open(path, 'r') as f:
-            return yaml.safe_load(f)
+    def __init__(self, config_path: str = 'config/config_sac.yaml'):
+        """
+        The constructor now correctly accepts a 'config_path' argument,
+        making the class versatile for the entire pipeline.
 
-    def _deep_merge(self, base, new):
-        """Recursively merges new dictionary into base."""
-        for key, value in new.items():
-            if isinstance(value, dict) and key in base and isinstance(base[key], dict):
-                base[key] = self._deep_merge(base[key], value)
-            else:
-                base[key] = value
-        return base
+        Args:
+            config_path (str): The path to the YAML configuration file to load.
+        """
+        self.config_path = Path(config_path)
+        self.config = self._load_config()
 
-    def _load_and_merge_configs(self):
-        # 1. Load the base configuration
-        base_config = self._load_yaml(self.base_config_path)
-        print(f"Loaded base configuration from: {self.base_config_path}")
-
-        # 2. Determine which device-specific config to load
-        if DEVICE == 'cuda':
-            device_config_path = self.base_config_path.parent / 'config_gpu.yaml'
-            print(f"✅ GPU detected. Loading and merging GPU-specific settings...")
-        else:
-            device_config_path = self.base_config_path.parent / 'config_cpu.yaml'
-            print(f"⚠️ CPU detected. Loading and merging CPU-specific settings...")
-
-        # 3. Load and merge the device-specific configuration
-        device_config = self._load_yaml(device_config_path)
-        merged_config = self._deep_merge(base_config, device_config)
+    def _load_config(self) -> dict:
+        """
+        Loads the configuration from the specified YAML file.
+        """
+        if not self.config_path.is_file():
+            raise FileNotFoundError(f"CRITICAL: Config file not found at the specified path: {self.config_path}")
         
-        print("Configuration loaded successfully.")
-        return merged_config
+        with open(self.config_path, 'r') as f:
+            config_data = yaml.safe_load(f)
+        
+        return config_data
 
-    def get(self, key, default=None):
+    def get(self, key: str, default=None):
+        """
+        Retrieves a configuration value using a dot-separated key (e.g., 'training.learning_rate').
+        """
         keys = key.split('.')
         value = self.config
         try:
@@ -57,8 +47,12 @@ class Config:
         except (KeyError, TypeError):
             return default
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
+        """ Allows dictionary-style access to the configuration. """
         return self.get(key)
 
-# A default global instance for modules that don't need a specific config
+
+# A default global instance for modules that don't require a specific config path.
+# This is used for simple scripts or when a default configuration is sufficient.
+# The main pipeline will create its own instances with specific paths.
 config = Config()
