@@ -1,43 +1,40 @@
 # config/config_sac.yaml
-# TACTICAL CONFIGURATION FOR RESOURCE-CONSTRAINED ENVIRONMENTS (Google Colab)
+# FINAL, HIGH-THROUGHPUT CONFIGURATION
 
 training:
-  learning_rate: 0.00015          # Slightly higher LR for faster initial learning
-  buffer_size: 500000             # Reduced buffer to conserve RAM
-  batch_size: 512                 # Large batch size is efficient on GPUs
+  learning_rate: 0.0002
+  buffer_size: 75000
+  batch_size: 128
   tau: 0.005
   gamma: 0.99
-
-  # Batch-style training for maximum GPU efficiency
-  train_freq: [2048, "step"]
-  gradient_steps: 1024
-  learning_starts: 5000
-
+  
+  # Continuous (Online) Training Strategy
+  train_freq: [1, "step"]
+  gradient_steps: 1
+  learning_starts: 1000
+  
   walk_forward:
     n_splits: 5
     min_train_size: 40000
     test_size: 30000
-    # --- CRITICAL ADJUSTMENT FOR COLAB ---
-    timesteps_per_split: 75000    # Reduced timesteps to target ~1.5 hours per split
-    eval_freq: 5000               # Evaluate more frequently on shorter runs
+    timesteps_per_split: 75000
+    eval_freq: 5000
 
   fine_tuning:
     recent_data_years: 2.5
-    total_timesteps: 100000       # Reduced for faster fine-tuning
+    total_timesteps: 100000
     learning_rate: 0.00002
 
 environment:
   initial_balance: 10000
-  sequence_length: 60
+  # --- STRATEGIC ADJUSTMENT: Reduce sequence length ---
+  sequence_length: 30 # A shorter sequence is much faster to process
   commission_pct: 0.0005
-  turnover_penalty: 0.001
 
 model:
   features_dim: 256
+  # CNN channels can be slightly increased as the model is simpler
   cnn_out_channels: 64
-  transformer_n_heads: 4
-  transformer_n_layers: 2
-  transformer_dropout: 0.1
 
 specialist_training:
   min_samples_per_regime: 5000
