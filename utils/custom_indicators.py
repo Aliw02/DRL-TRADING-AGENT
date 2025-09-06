@@ -6,6 +6,40 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+
+def _add_chandelier_exit_signals(df: pd.DataFrame, period=7, multiplier=4.0):
+    """Calculates Chandelier Exit and adds binary flip signals."""
+    logger.info("Engineering Chandelier Exit flip signals...")
+
+    atr = ta.ATR(df['high'], df['low'], df['close'], timeperiod=period)
+
+    long_stop = df['high'].rolling(period).max() - atr * multiplier
+    short_stop = df['low'].rolling(period).min() + atr * multiplier
+
+    # Initialize columns
+    df['ce_direction'] = 0
+    df['bullish_flip'] = 0
+    df['bearish_flip'] = 0
+
+    # Loop to determine direction and flips
+    for i in range(1, len(df)):
+        # Determine trend direction
+        if df['close'].iloc[i] > long_stop.iloc[i-1]:
+            df['ce_direction'].iloc[i] = 1
+        elif df['close'].iloc[i] < short_stop.iloc[i-1]:
+            df['ce_direction'].iloc[i] = -1
+        else:
+            df['ce_direction'].iloc[i] = df['ce_direction'].iloc[i-1]
+
+        # Detect flips
+        if df['ce_direction'].iloc[i] == 1 and df['ce_direction'].iloc[i-1] == -1:
+            df['bullish_flip'].iloc[i] = 1 # تلميح: حدث انعكاس صاعد الآن!
+
+        if df['ce_direction'].iloc[i] == -1 and df['ce_direction'].iloc[i-1] == 1:
+            df['bearish_flip'].iloc[i] = 1 # تلميح: حدث انعكاس هابط الآن!
+
+    return df
+
 def _add_multi_timeframe_features(df: pd.DataFrame):
     if not isinstance(df.index, pd.DatetimeIndex): return df
     logger.info("Engineering multi-timeframe features...")
@@ -88,7 +122,8 @@ def calculate_all_indicators(df: pd.DataFrame):
     
     df = _add_candlestick_features(df)
     df = _add_time_features(df)
-    # df = _add_advanced_statistical_features(df) # <-- ADD THIS LINE
+    df = _add_advanced_statistical_features(df) 
+    df = _add_chandelier_exit_signals(df) 
 
     logger.info("Cleaning up final dataframe...")
     return df.bfill().ffill().fillna(0)

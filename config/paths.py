@@ -4,13 +4,20 @@ import os
 
 # --- Define project directories ---
 # The root directory for the project code
+
 ROOT_DIR = Path(__file__).parent.parent.resolve()
 # The root directory for data and results on your Google Drive
 DRIVE_DIR = Path("/content/drive/MyDrive").resolve()
 
+USE_GOOGLE_COLAB = False
+if USE_GOOGLE_COLAB:
+    DRIVE_DIR = Path("/content/drive/MyDrive").resolve()
+    ROOT_DIR = DRIVE_DIR
+    print("Using Google Drive directory for data and results.")
+    
 # --- Define data and results paths ---
-DATA_DIR = DRIVE_DIR / "data"
-RESULTS_DIR = DRIVE_DIR / "results"
+DATA_DIR = ROOT_DIR / "data"
+RESULTS_DIR = ROOT_DIR / "results"
 WALK_FORWARD_DIR = RESULTS_DIR / "walk_forward"
 FINAL_MODEL_DIR = RESULTS_DIR / "final_model_for_live"
 

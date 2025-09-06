@@ -17,8 +17,8 @@ training:
     n_splits: 5
     min_train_size: 40000
     test_size: 30000
-    timesteps_per_split: 75000
-    eval_freq: 5000
+    timesteps_per_split: 100000
+    eval_freq: 10000
 
   fine_tuning:
     recent_data_years: 2.5
@@ -35,13 +35,13 @@ specialist_training:
 
 environment:
   initial_balance: 10000
-  sequence_length: 30
+  sequence_length: 70
   commission_pct: 0.0005
   
   # --- NEW STRATEGIC OBJECTIVE PARAMETERS ---
   # Defines the target for the monthly performance bonus.
-  monthly_profit_target_pct: 0.15  # 15% target
-  monthly_bonus_reward: 150.0      # A massive, decisive bonus reward
+  monthly_profit_target_pct: 0.30  # 15% target
+  monthly_bonus_reward: 300.0      # A massive, decisive bonus reward
   
   # Assuming 15-minute timeframe: 4 candles/hour * 24 hours * 21 trading days
   steps_per_month: 2016
