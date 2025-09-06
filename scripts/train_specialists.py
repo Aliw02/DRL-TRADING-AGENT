@@ -11,6 +11,7 @@ import json
 # --- Add project root to path ---
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
+from sklearn.preprocessing import RobustScaler
 from config import paths
 from config.init import Config
 from utils.logger import setup_logging, get_logger
@@ -50,7 +51,8 @@ def create_regime_datasets(full_df: pd.DataFrame, regime_classifier, regime_scal
 def run_specialist_training_pipeline(config_path: str):
     """
     Main pipeline to forge a dedicated specialist agent for each market regime.
-    It now uses a flexible, config-driven threshold for data requirements.
+    This version includes the CRITICAL step of creating and saving a
+    dedicated scaler for each specialist.
     """
     setup_logging()
     logger = get_logger(__name__)
@@ -65,7 +67,6 @@ def run_specialist_training_pipeline(config_path: str):
         regime_model = joblib.load(paths.FINAL_MODEL_DIR / "regime_gmm_model.joblib")
         regime_scaler = joblib.load(paths.FINAL_MODEL_DIR / "regime_robust_scaler.joblib")
         
-        # --- CRITICAL FIX: Load the minimum sample requirement from the config ---
         min_samples_requirement = agent_config.get('specialist_training.min_samples_per_regime', 5000)
         logger.info(f"Strategic Directive: Minimum samples per regime set to {min_samples_requirement}.")
 
@@ -80,23 +81,40 @@ def run_specialist_training_pipeline(config_path: str):
             logger.info("="*60)
 
             specialist_save_dir = paths.FINAL_MODEL_DIR / f"specialist_regime_{regime_id}"
+            os.makedirs(specialist_save_dir, exist_ok=True) # Ensure directory exists
+            
             if (specialist_save_dir / "models/best_model.zip").exists():
                 logger.info(f"Specialist for Regime {regime_id} already trained. Skipping.")
                 continue
 
             regime_df = regime_datasets[regime_id]
-            
-            # --- CRITICAL FIX: Use the flexible requirement from the config ---
             if len(regime_df) < min_samples_requirement:
-                logger.warning(f"Skipping Regime {regime_id} due to insufficient data ({len(regime_df)} samples, requirement is {min_samples_requirement}).")
+                logger.warning(f"Skipping Regime {regime_id} due to insufficient data.")
                 continue
 
-            # Partition the specialist's data into training and evaluation sets
+            # --- CRITICAL FIX: DATA PREPARATION AND SCALER SAVING ---
+            # 1. Partition the specialist's data into training and evaluation sets
             train_size = int(len(regime_df) * 0.85)
-            train_df = regime_df.iloc[:train_size]
-            eval_df = regime_df.iloc[train_size:]
+            train_df = regime_df.iloc[:train_size].copy() # Use .copy() to avoid SettingWithCopyWarning
+            eval_df = regime_df.iloc[train_size:].copy()
 
-            # Deploy the standardized training protocol
+            # 2. Define feature columns for the specialist
+            feature_cols = [c for c in train_df.columns if c not in ['open', 'high', 'low', 'close', 'time', 'timestamp']]
+            
+            # 3. Create and fit a dedicated scaler ONLY on the specialist's training data
+            specialist_scaler = RobustScaler()
+            train_df[feature_cols] = specialist_scaler.fit_transform(train_df[feature_cols])
+            
+            # 4. Transform the evaluation data using the SAME scaler
+            eval_df[feature_cols] = specialist_scaler.transform(eval_df[feature_cols])
+
+            # 5. Save the specialist's unique scaler (their data fingerprint)
+            scaler_path = specialist_save_dir / f"specialist_scaler_regime_{regime_id}.joblib"
+            joblib.dump(specialist_scaler, scaler_path)
+            logger.info(f"✅ Specialist scaler for Regime {regime_id} saved to: {scaler_path}")
+            # ----------------------------------------------------------------
+
+            # Deploy the standardized training protocol on the NOW-SCALED data
             train_one_segment(
                 train_df=train_df,
                 eval_df=eval_df,

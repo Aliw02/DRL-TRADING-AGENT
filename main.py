@@ -14,6 +14,7 @@ from scripts.train_regime_model import train_and_analyze_regime_model
 from scripts.create_enriched_dataset import enrich_dataset_with_regimes
 from scripts.train_specialists import run_specialist_training_pipeline
 from scripts.backtest_hierarchical import run_hierarchical_backtest
+from scripts.analyze_specialists import run_squad_analysis
 from scripts.plot_results import HierarchicalPlotter
 from config.init import Config
 from config import paths
@@ -55,6 +56,12 @@ def run_full_hierarchical_pipeline(config_path: str):
         # --- STAGE 4: Forge the Specialist Squad ---
         logger.info("\n--- PIPELINE STAGE 4: Forging Specialist Agent Squad ---")
         run_specialist_training_pipeline(config_path=config_path)
+        
+        # --- STAGE 4.5 ANALYSIS: CHECKPOINT ---
+        logger.info("\n--- PIPELINE STAGE 4.5: Specialist Squad Analysis Checkpoint ---")
+        logger.info("Specialist agents have been trained. Proceeding to hierarchical backtesting.")
+        run_squad_analysis()
+        
         
         # --- STAGE 5: Full Hierarchical Combat Simulation ---
         logger.info("\n--- PIPELINE STAGE 5: Hierarchical Combat Simulation ---")
