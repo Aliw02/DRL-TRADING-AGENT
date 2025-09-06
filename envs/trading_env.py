@@ -51,7 +51,11 @@ class TradingEnv(gym.Env):
         self.high_water_mark = self.initial_balance
         self.previous_step_equity = self.initial_balance
         
-        return self._next_observation(), {}
+        # إضافة لتعريف المتغير الذي كان سيتسبب بخطأ لاحقاً
+        self.previous_month_end_balance = self.initial_balance # <-- تم الإضافة هنا
+
+        # إصلاح الخطأ الرئيسي بتمرير القيمة المطلوبة للدالة
+        return self._next_observation(self.initial_balance), {} # <-- تم التعديل هنا
     
     def step(self, action):
         target_position_size = float(action[0])
