@@ -37,11 +37,14 @@ environment:
   initial_balance: 10000
   sequence_length: 70
   commission_pct: 0.0005
-  
-  # --- NEW STRATEGIC OBJECTIVE PARAMETERS ---
-  # Defines the target for the monthly performance bonus.
-  monthly_profit_target_pct: 0.30  # 15% target
-  monthly_bonus_reward: 300.0      # A massive, decisive bonus reward
-  
-  # Assuming 15-minute timeframe: 4 candles/hour * 24 hours * 21 trading days
+  max_account_drawdown: 0.20 # حد الخسارة يبقى كما هو للحماية
+
+  # --- 💡 الإعدادات الجديدة المدمجة ---
+  # المكافأة اليومية
+  daily_growth_reward_factor: 50.0
+  volatility_penalty_factor: 0.5
+
+  # الهدف الشهري الجديد
+  monthly_profit_target_pct: 0.50  # 50% target
+  monthly_bonus_reward: 300.0      # مكافأة كبيرة جداً
   steps_per_month: 2016
