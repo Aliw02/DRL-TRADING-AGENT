@@ -1,12 +1,11 @@
 # scripts/train_specialists.py
-# ELITE AGENT FORGING PROTOCOL WITH WALK-FORWARD VALIDATION
+# ELITE AGENT FORGING PROTOCOL WITH ADAPTIVE WALK-FORWARD VALIDATION
 
 import pandas as pd
 import joblib
 import os
 import sys
 import gc
-import json
 from sklearn.preprocessing import RobustScaler
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3 import SAC
@@ -18,14 +17,13 @@ from config import paths
 from config.init import Config
 from utils.logger import setup_logging, get_logger
 from utils.accelerator import DEVICE
-from scripts.train_agent import train_one_segment # We still use this core training engine
+from scripts.train_agent import train_one_segment
 from envs.trading_env import TradingEnv
 from stable_baselines3.common.env_util import make_vec_env
 
 def create_regime_datasets(full_df: pd.DataFrame, regime_classifier, regime_scaler) -> dict:
     """
-    Analyzes the full dataset, assigns a regime to each timestep using the
-    master classifier, and then partitions the data into dedicated datasets.
+    Analyzes the full dataset, assigns a regime to each timestep, and partitions the data.
     """
     logger = get_logger(__name__)
     logger.info("Partitioning master dataset by market regime...")
@@ -44,22 +42,28 @@ def create_regime_datasets(full_df: pd.DataFrame, regime_classifier, regime_scal
 
 def run_specialist_walk_forward(regime_df: pd.DataFrame, specialist_save_dir: str, config: Config, regime_id: int):
     """
-    Applies a robust walk-forward training and validation process for a single specialist.
+    Applies a robust walk-forward training with parameters suitable for smaller, specialized datasets.
     """
     logger = get_logger(__name__)
-    wf_config = config.get('training.walk_forward')
-    n_splits = wf_config.get('n_splits', 3) # Use fewer splits for specialists if needed
-    min_train_size = wf_config.get('min_train_size', 10000)
-    test_size = wf_config.get('test_size', 5000)
     
-    feature_cols = [c for c in regime_df.columns if c not in ['open', 'high', 'low', 'close', 'time', 'timestamp']]
+    # --- CRITICAL FIX: Use dedicated, more flexible parameters for specialists ---
+    # Instead of inheriting the main config's demanding values, we define
+    # a more appropriate set of parameters here.
+    n_splits = 3
+    min_train_size = 8000
+    test_size = 2500
+    holdout_size = 2500
     
-    # Reserve a final holdout set for champion selection
-    holdout_size = test_size
-    if len(regime_df) < min_train_size + (n_splits * test_size) + holdout_size:
-        logger.warning(f"Regime {regime_id} has insufficient data for full walk-forward. Skipping.")
+    # Calculate the actual data requirement for this specialist
+    total_required_samples = min_train_size + (n_splits * test_size) + holdout_size
+    logger.info(f"Specialist WF Requirement: {total_required_samples} samples.")
+    
+    if len(regime_df) < total_required_samples:
+        logger.warning(f"Regime {regime_id} has {len(regime_df)} samples, but requires {total_required_samples}. Skipping.")
         return
 
+    feature_cols = [c for c in regime_df.columns if c not in ['open', 'high', 'low', 'close', 'time', 'timestamp']]
+    
     training_data_end = len(regime_df) - holdout_size
     training_df = regime_df.iloc[:training_data_end]
     holdout_df = regime_df.iloc[training_data_end:]
@@ -82,7 +86,6 @@ def run_specialist_walk_forward(regime_df: pd.DataFrame, specialist_save_dir: st
         train_df_split = training_df.iloc[:train_end].copy()
         test_df_split = training_df.iloc[train_end:test_end].copy()
 
-        # --- CRITICAL: Fit scaler ONLY on the current training split ---
         scaler = RobustScaler()
         train_df_split.loc[:, feature_cols] = scaler.fit_transform(train_df_split[feature_cols])
         test_df_split.loc[:, feature_cols] = scaler.transform(test_df_split[feature_cols])
@@ -90,11 +93,9 @@ def run_specialist_walk_forward(regime_df: pd.DataFrame, specialist_save_dir: st
         os.makedirs(split_save_path, exist_ok=True)
         joblib.dump(scaler, os.path.join(split_save_path, f"scaler_split_{split_num}.joblib"))
 
-        # Use the core training engine for this segment
         train_one_segment(train_df_split, test_df_split, split_save_path, config)
         gc.collect()
 
-    # --- Find the champion model for this specialist ---
     logger.info(f"--- Specialist {regime_id}: Finding champion model ---")
     best_model_path, best_reward = None, -float('inf')
     for i in range(1, n_splits + 1):
@@ -114,16 +115,15 @@ def run_specialist_walk_forward(regime_df: pd.DataFrame, specialist_save_dir: st
         
         if mean_reward > best_reward:
             best_reward, best_model_path = mean_reward, model_path
-            # Save the scaler that corresponds to the best model
             joblib.dump(scaler, specialist_save_dir / f"specialist_scaler_regime_{regime_id}.joblib")
             logger.info(f"🏆 New champion for Specialist {regime_id}! Split {i} is best.")
         del model, eval_env
 
     if best_model_path:
-        # Copy the best model to the main specialist directory for deployment
         final_model_path = specialist_save_dir / "models/best_model.zip"
         os.makedirs(os.path.dirname(final_model_path), exist_ok=True)
-        os.replace(best_model_path, final_model_path)
+        # Use os.rename for moving the file, it's more atomic
+        os.rename(best_model_path, final_model_path)
         logger.info(f"✅ Champion model for Specialist {regime_id} has been deployed.")
     else:
         logger.error(f"Could not determine a champion model for Specialist {regime_id}.")
@@ -135,7 +135,7 @@ def run_specialist_training_pipeline(config_path: str):
     setup_logging()
     logger = get_logger(__name__)
     logger.info("="*80)
-    logger.info(" HIERARCHICAL REINFORCEMENT LEARNING: SPECIALIST FORGING PROTOCOL (WALK-FORWARD EDITION) ")
+    logger.info(" HIERARCHICAL REINFORCEMENT LEARNING: SPECIALIST FORGING PROTOCOL (ADAPTIVE WF EDITION) ")
     logger.info("="*80)
 
     try:
@@ -144,14 +144,12 @@ def run_specialist_training_pipeline(config_path: str):
         regime_model = joblib.load(paths.FINAL_MODEL_DIR / "regime_gmm_model.joblib")
         regime_scaler = joblib.load(paths.FINAL_MODEL_DIR / "regime_robust_scaler.joblib")
         
-        min_samples_requirement = agent_config.get('specialist_training.min_samples_per_regime', 25000) # Increased requirement for WF
-        logger.info(f"Strategic Directive: Minimum samples per regime set to {min_samples_requirement}.")
         regime_datasets = create_regime_datasets(full_df, regime_model, regime_scaler)
 
         num_regimes = regime_model.n_components
         for regime_id in range(num_regimes):
             logger.info("\n" + "="*60)
-            logger.info(f" COMMENCING WALK-FORWARD TRAINING FOR SPECIALIST: REGIME {regime_id} ")
+            logger.info(f" COMMENCING ADAPTIVE WF TRAINING FOR SPECIALIST: REGIME {regime_id} ")
             logger.info("="*60)
 
             specialist_save_dir = str(paths.FINAL_MODEL_DIR / f"specialist_regime_{regime_id}")
@@ -159,12 +157,11 @@ def run_specialist_training_pipeline(config_path: str):
                 logger.info(f"Champion for Specialist {regime_id} already exists. Skipping.")
                 continue
 
-            regime_df = regime_datasets[regime_id]
-            if len(regime_df) < min_samples_requirement:
-                logger.warning(f"Skipping Regime {regime_id} due to insufficient data ({len(regime_df)} samples).")
+            regime_df = regime_datasets.get(regime_id)
+            if regime_df is None or regime_df.empty:
+                logger.warning(f"No data found for Regime {regime_id}. Skipping.")
                 continue
 
-            # --- Deploy the robust walk-forward training process for this specialist ---
             run_specialist_walk_forward(regime_df, specialist_save_dir, agent_config, regime_id)
 
         logger.info("\n" + "="*80)

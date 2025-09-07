@@ -70,25 +70,25 @@ def _add_multi_timeframe_features(df: pd.DataFrame):
     """
     if not isinstance(df.index, pd.DatetimeIndex): return df
     logger.info("Engineering multi-timeframe features (look-ahead bias corrected)...")
-    
-    timeframes = {'15min': '15T', '1h': '1H'}
-    
+    timeframes = {'15min': '15min', '1h': '1h'}
+
     for name, rule in timeframes.items():
         df_resampled = df.resample(rule).agg({
             'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'
         }).dropna()
-        
+
         rsi_htf = ta.RSI(df_resampled['close'], timeperiod=14)
         adx_htf = ta.ADX(df_resampled['high'], df_resampled['low'], df_resampled['close'], timeperiod=14)
-        
+
         df_indicators_shifted = pd.DataFrame({
             f'rsi_{name}': rsi_htf,
             f'adx_{name}': adx_htf
         }).shift(1)
-        
+
         df = pd.merge(df, df_indicators_shifted, left_index=True, right_index=True, how='left')
-        df[f'rsi_{name}'].fillna(method='ffill', inplace=True)
-        df[f'adx_{name}'].fillna(method='ffill', inplace=True)
+
+        df[f'rsi_{name}'] = df[f'rsi_{name}'].ffill()
+        df[f'adx_{name}'] = df[f'adx_{name}'].ffill()
 
     return df
 

@@ -11,7 +11,7 @@ training:
   # Continuous (Online) Training Strategy
   train_freq: [1, "step"]
   gradient_steps: 1
-  learning_starts: 1000
+  learning_starts: 10000
   
   walk_forward:
     n_splits: 5
