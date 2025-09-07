@@ -1,54 +1,95 @@
-# utils/custom_indicators.py (CORRECTED - rsi_x_adx feature added back)
+# utils/custom_indicators.py (UPGRADED WITH NUMBA FOR MAXIMUM PERFORMANCE)
 import pandas as pd
 import numpy as np
 import talib as ta
 from utils.logger import get_logger
+from numba import njit
 
 logger = get_logger(__name__)
 
+# --- NEW: Numba JIT-compiled function for high-speed calculation ---
+@njit
+def _calculate_ce_signals_numba(close, long_stop, short_stop):
+    """
+    A Numba-accelerated function to compute Chandelier Exit signals.
+    Operates on NumPy arrays for extreme speed.
+    """
+    n = len(close)
+    ce_direction = np.zeros(n, dtype=np.int8)
+    bullish_flip = np.zeros(n, dtype=np.int8)
+    bearish_flip = np.zeros(n, dtype=np.int8)
+
+    for i in range(1, n):
+        # Determine trend direction
+        if close[i] > long_stop[i-1]:
+            ce_direction[i] = 1
+        elif close[i] < short_stop[i-1]:
+            ce_direction[i] = -1
+        else:
+            ce_direction[i] = ce_direction[i-1]
+
+        # Detect flips
+        if ce_direction[i] == 1 and ce_direction[i-1] == -1:
+            bullish_flip[i] = 1
+
+        if ce_direction[i] == -1 and ce_direction[i-1] == 1:
+            bearish_flip[i] = 1
+            
+    return ce_direction, bullish_flip, bearish_flip
+
 
 def _add_chandelier_exit_signals(df: pd.DataFrame, period=7, multiplier=4.0):
-    """Calculates Chandelier Exit and adds binary flip signals."""
-    logger.info("Engineering Chandelier Exit flip signals...")
+    """
+    Calculates Chandelier Exit using a high-performance Numba backend.
+    """
+    logger.info("Engineering Chandelier Exit flip signals (Numba-accelerated)...")
 
     atr = ta.ATR(df['high'], df['low'], df['close'], timeperiod=period)
 
     long_stop = df['high'].rolling(period).max() - atr * multiplier
     short_stop = df['low'].rolling(period).min() + atr * multiplier
 
-    # Initialize columns
-    df['ce_direction'] = 0
-    df['bullish_flip'] = 0
-    df['bearish_flip'] = 0
-
-    # Loop to determine direction and flips
-    for i in range(1, len(df)):
-        # Determine trend direction
-        if df['close'].iloc[i] > long_stop.iloc[i-1]:
-            df['ce_direction'].iloc[i] = 1
-        elif df['close'].iloc[i] < short_stop.iloc[i-1]:
-            df['ce_direction'].iloc[i] = -1
-        else:
-            df['ce_direction'].iloc[i] = df['ce_direction'].iloc[i-1]
-
-        # Detect flips
-        if df['ce_direction'].iloc[i] == 1 and df['ce_direction'].iloc[i-1] == -1:
-            df['bullish_flip'].iloc[i] = 1 # تلميح: حدث انعكاس صاعد الآن!
-
-        if df['ce_direction'].iloc[i] == -1 and df['ce_direction'].iloc[i-1] == 1:
-            df['bearish_flip'].iloc[i] = 1 # تلميح: حدث انعكاس هابط الآن!
-
+    # --- Call the super-fast Numba function ---
+    # We pass NumPy arrays (.values) for maximum performance
+    ce_direction, bullish_flip, bearish_flip = _calculate_ce_signals_numba(
+        df['close'].values, 
+        long_stop.values, 
+        short_stop.values
+    )
+    
+    # Assign the results back to the DataFrame
+    df['ce_direction'] = ce_direction
+    df['bullish_flip'] = bullish_flip
+    df['bearish_flip'] = bearish_flip
+    
     return df
 
 def _add_multi_timeframe_features(df: pd.DataFrame):
+    """
+    SCIENTIFICALLY-CORRECT MULTI-TIMEFRAME FEATURE ENGINEERING
+    """
     if not isinstance(df.index, pd.DatetimeIndex): return df
-    logger.info("Engineering multi-timeframe features...")
-    df_m15 = df['close'].resample('15min').ohlc()
-    df_h1 = df['close'].resample('1h').ohlc()
-    df['rsi_m15'] = ta.RSI(df_m15['close'], timeperiod=14).reindex(df.index, method='ffill')
-    df['rsi_h1'] = ta.RSI(df_h1['close'], timeperiod=14).reindex(df.index, method='ffill')
-    df['adx_m15'] = ta.ADX(df_m15['high'], df_m15['low'], df_m15['close'], timeperiod=14).reindex(df.index, method='ffill')
-    df['adx_h1'] = ta.ADX(df_h1['high'], df_h1['low'], df_h1['close'], timeperiod=14).reindex(df.index, method='ffill')
+    logger.info("Engineering multi-timeframe features (look-ahead bias corrected)...")
+    
+    timeframes = {'15min': '15T', '1h': '1H'}
+    
+    for name, rule in timeframes.items():
+        df_resampled = df.resample(rule).agg({
+            'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'
+        }).dropna()
+        
+        rsi_htf = ta.RSI(df_resampled['close'], timeperiod=14)
+        adx_htf = ta.ADX(df_resampled['high'], df_resampled['low'], df_resampled['close'], timeperiod=14)
+        
+        df_indicators_shifted = pd.DataFrame({
+            f'rsi_{name}': rsi_htf,
+            f'adx_{name}': adx_htf
+        }).shift(1)
+        
+        df = pd.merge(df, df_indicators_shifted, left_index=True, right_index=True, how='left')
+        df[f'rsi_{name}'].fillna(method='ffill', inplace=True)
+        df[f'adx_{name}'].fillna(method='ffill', inplace=True)
+
     return df
 
 def _add_volatility_normalized_features(df: pd.DataFrame):
@@ -78,15 +119,10 @@ def _add_time_features(df: pd.DataFrame):
     return df
 
 def _add_advanced_statistical_features(df: pd.DataFrame, window=20):
-    """Calculates rolling skewness and kurtosis of returns."""
     logger.info("Engineering advanced statistical features (Skew/Kurtosis)...")
-    
-    # Calculate log returns for better statistical properties
     returns = np.log(df['close'] / df['close'].shift(1)).fillna(0)
-    
     df[f'returns_skew_{window}'] = returns.rolling(window=window).skew()
     df[f'returns_kurt_{window}'] = returns.rolling(window=window).kurt()
-    
     return df
 
 def calculate_all_indicators(df: pd.DataFrame):
@@ -105,18 +141,14 @@ def calculate_all_indicators(df: pd.DataFrame):
     df['roc'] = ta.ROC(cl)
     df['atr'] = ta.ATR(hi, lo, cl)
     df['obv'] = ta.OBV(cl, vol)
-    
-    # Chaikin Money Flow (CMF)
     ad = ta.AD(hi, lo, cl, vol)
     df['cmf'] = ad.rolling(20).sum() / vol.rolling(20).sum()
-
     df['vi_plus'] = ta.PLUS_DI(hi, lo, cl)
     df['vi_minus'] = ta.MINUS_DI(hi, lo, cl)
     
     df = _add_multi_timeframe_features(df)
     df = _add_volatility_normalized_features(df)
     
-    # --- CRITICAL FIX: Calculate the missing 'rsi_x_adx' feature ---
     logger.info("Engineering feature interactions...")
     df['rsi_x_adx'] = (df['rsi'] / 100) * (df['adx'] / 100)
     
