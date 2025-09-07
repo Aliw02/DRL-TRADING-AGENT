@@ -103,7 +103,13 @@ class TradingEnv(gym.Env):
             if self.balance > target_balance:
                 monthly_bonus_reward = self.monthly_bonus
                 self.previous_month_end_balance = self.balance
+                logger.info(f"🎉 Monthly profit target achieved! Balance: {self.balance:.2f}, Target: {target_balance:.2f}. Bonus: {monthly_bonus_reward:.2f}")
+            else:
+                logger.info(f"Monthly target not met. Balance: {self.balance:.2f}, Target: {target_balance:.2f}. No bonus.")
+            
             self.month_start_step = self.current_step
+
+            
 
         # --- 💡 4. المكافأة اليومية اللوغاريتمية (التعديل الرئيسي) ---
         daily_log_reward = 0.0
