@@ -38,29 +38,39 @@ def _calculate_ce_signals_numba(close, long_stop, short_stop):
     return ce_direction, bullish_flip, bearish_flip
 
 
+# utils/custom_indicators.py
+
+# ... (نفس الكود للدالة _calculate_ce_signals_numba)
+
 def _add_chandelier_exit_signals(df: pd.DataFrame, period=7, multiplier=4.0):
     """
-    Calculates Chandelier Exit using a high-performance Numba backend.
+    Calculates Chandelier Exit using a high-performance Numba backend
+    AND adds a strategic "distance to stop" feature.
     """
-    logger.info("Engineering Chandelier Exit flip signals (Numba-accelerated)...")
+    logger.info("Engineering Chandelier Exit signals and strategic distance feature...")
 
     atr = ta.ATR(df['high'], df['low'], df['close'], timeperiod=period)
 
     long_stop = df['high'].rolling(period).max() - atr * multiplier
     short_stop = df['low'].rolling(period).min() + atr * multiplier
 
-    # --- Call the super-fast Numba function ---
-    # We pass NumPy arrays (.values) for maximum performance
     ce_direction, bullish_flip, bearish_flip = _calculate_ce_signals_numba(
         df['close'].values, 
         long_stop.values, 
         short_stop.values
     )
     
-    # Assign the results back to the DataFrame
     df['ce_direction'] = ce_direction
     df['bullish_flip'] = bullish_flip
     df['bearish_flip'] = bearish_flip
+    
+    distance_to_stop = np.where(
+        df['ce_direction'] == 1,
+        (df['close'] - long_stop) / (df['close'] + 1e-9),
+        (short_stop - df['close']) / (df['close'] + 1e-9)
+    )
+    df['dist_to_ce_stop_pct'] = distance_to_stop * 100
+    # ------------------------------------
     
     return df
 
