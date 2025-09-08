@@ -1,80 +1,54 @@
 # main.py
-# FINAL, HIERARCHICAL CENTRAL COMMAND SCRIPT
+# CE-ALIGNED HIERARCHICAL CENTRAL COMMAND SCRIPT
 
 import argparse
 import sys
 import os
 
-# Ensure the project root is in the Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from utils.logger import setup_logging, get_logger
 from scripts.preprocess_data import run_preprocessing
-from scripts.train_regime_model import train_and_analyze_regime_model
-from scripts.create_enriched_dataset import enrich_dataset_with_regimes
 from scripts.train_specialists import run_specialist_training_pipeline
 from scripts.backtest_hierarchical import run_hierarchical_backtest
-from scripts.analyze_specialists import run_squad_analysis
 from scripts.plot_results import HierarchicalPlotter
-from config.init import Config
 from config import paths
 
-def run_full_hierarchical_pipeline(config_path: str):
+def run_ce_aligned_pipeline(config_path: str):
     """
-    Executes the entire DRL agent development pipeline, from raw data to a
-    production-ready hierarchical squad of specialist agents.
+    Executes the streamlined DRL pipeline to develop a squad of CE-aligned
+    specialist agents.
     """
     setup_logging()
     logger = get_logger(__name__)
 
     logger.info("=" * 60)
-    logger.info("🚀 INITIATING HIERARCHICAL AGENT DEVELOPMENT PIPELINE 🚀")
+    logger.info("🚀 INITIATING CE-ALIGNED AGENT DEVELOPMENT PIPELINE 🚀")
     logger.info("=" * 60)
 
     try:
-        # --- STAGE 1: Foundational Data Engineering ---
+        # STAGE 1: Foundational Data Engineering (Unchanged)
         logger.info("\n--- PIPELINE STAGE 1: Initial Feature Engineering ---")
         if not os.path.exists(paths.PROCESSED_DATA_FILE):
             run_preprocessing()
         else:
-            logger.info(f"Preprocessed data already exists at: {paths.PROCESSED_DATA_FILE}. Skipping preprocessing.")
+            logger.info(f"Processed data already exists at: {paths.PROCESSED_DATA_FILE}. Skipping.")
 
-        # --- STAGE 2: Dynamic Market Regime Detection (Command Unit Training) ---
-        logger.info("\n--- PIPELINE STAGE 2: Command Unit Training (Regime Detection) ---")
-        if not os.path.exists(paths.FINAL_MODEL_DIR / "regime_gmm_model.joblib") and not os.path.exists(paths.FINAL_MODEL_DIR / "regime_robust_scaler.joblib"):
-            train_and_analyze_regime_model()
-        else:
-            logger.info("Regime model and scaler already exist. Skipping regime training.")
-
-        # --- STAGE 3: Enriching Dataset with Intelligence ---
-        logger.info("\n--- PIPELINE STAGE 3: Enriching Dataset with Regime Intelligence ---")
-        if not os.path.exists(paths.FINAL_ENRICHED_DATA_FILE):
-            enrich_dataset_with_regimes()
-        else:
-            logger.info(f"Enriched dataset already exists at: {paths.FINAL_ENRICHED_DATA_FILE}. Skipping enrichment.")
-
-        # --- STAGE 4: Forge the Specialist Squad ---
-        logger.info("\n--- PIPELINE STAGE 4: Forging Specialist Agent Squad ---")
+        # STAGE 2: Forge the Specialist Squad (New Logic)
+        logger.info("\n--- PIPELINE STAGE 2: Forging CE-Aligned Specialist Squad ---")
         run_specialist_training_pipeline(config_path=config_path)
         
-        # --- STAGE 4.5 ANALYSIS: CHECKPOINT ---
-        logger.info("\n--- PIPELINE STAGE 4.5: Specialist Squad Analysis Checkpoint ---")
-        logger.info("Specialist agents have been trained. Proceeding to hierarchical backtesting.")
-        run_squad_analysis()
-        
-        
-        # --- STAGE 5: Full Hierarchical Combat Simulation ---
-        logger.info("\n--- PIPELINE STAGE 5: Hierarchical Combat Simulation ---")
+        # STAGE 3: Full Hierarchical Combat Simulation (New Logic)
+        logger.info("\n--- PIPELINE STAGE 3: Hierarchical Combat Simulation ---")
         run_hierarchical_backtest()
         
-        # --- STAGE 6: Visualization of Hierarchical Performance ---
-        logger.info("\n--- PIPELINE STAGE 6: Generating Strategic Visualizations ---")
-        # Note: The plotter will need to be pointed to the new hierarchical result files
+        # STAGE 4: Visualization of Performance (Unchanged)
+        logger.info("\n--- PIPELINE STAGE 4: Generating Strategic Visualizations ---")
         plotter = HierarchicalPlotter()
         plotter.run_all_plots()
 
         logger.info("\n" + "=" * 60)
-        logger.info("✅ ALL HIERARCHICAL PIPELINE STAGES COMPLETED SUCCESSFULLY ✅")
+        logger.info("✅ ALL CE-ALIGNED PIPELINE STAGES COMPLETED SUCCESSFULLY ✅")
         logger.info("=" * 60)
 
     except Exception as e:
@@ -82,8 +56,8 @@ def run_full_hierarchical_pipeline(config_path: str):
         raise
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run the full professional DRL agent pipeline.")
+    parser = argparse.ArgumentParser(description="Run the DRL agent pipeline.")
     parser.add_argument('--config', type=str, default='config/config_sac.yaml', help="Path to the agent's training config.")
     args = parser.parse_args()
     
-    run_full_hierarchical_pipeline(config_path=args.config)
+    run_ce_aligned_pipeline(config_path=args.config)

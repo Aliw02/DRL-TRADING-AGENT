@@ -1,5 +1,5 @@
 # config/config_sac.yaml
-# FINAL, HIGH-THROUGHPUT CONFIGURATION
+# CONFIGURATION FOR CE-ALIGNED STRATEGIC AGENT V2
 
 training:
   learning_rate: 0.0002
@@ -7,8 +7,6 @@ training:
   batch_size: 128
   tau: 0.005
   gamma: 0.99
-  
-  # Continuous (Online) Training Strategy
   train_freq: [1, "step"]
   gradient_steps: 1
   learning_starts: 10000
@@ -17,17 +15,16 @@ training:
     n_splits: 5
     min_train_size: 40000
     test_size: 30000
-    timesteps_per_split: 100000
-    eval_freq: 10000
+    timesteps_per_split: 75000 
+    eval_freq: 7500
 
   fine_tuning:
     recent_data_years: 2.5
-    total_timesteps: 100000
+    total_timesteps: 50000
     learning_rate: 0.00002
 
 model:
   features_dim: 256
-  # CNN channels can be slightly increased as the model is simpler
   cnn_out_channels: 64
 
 specialist_training:
@@ -39,12 +36,17 @@ environment:
   commission_pct: 0.0005
   max_account_drawdown: 0.20
 
-  
-  
-  daily_growth_reward_factor: 40.0
-  volatility_penalty_factor: 0.7
-
-  
-  monthly_profit_target_pct: 0.13  # 50% target
-  monthly_bonus_reward: 130.0     
-  steps_per_month: 2016
+  reward_shaping:
+    patience_reward_factor: 0.1
+    cowardice_penalty_factor: 50.0
+    profit_risk_reward_factor: 2.0
+    opportunity_cost_penalty_factor: 0.5
+    turnover_penalty_factor: 0.1
+    
+    # NEW: Penalizes the agent for doing nothing for too long.
+    inactivity_penalty_factor: 0.01
+    max_idle_steps: 96 # One day of 15-min bars.
+    
+    # Deactivated as requested for the first training run.
+    risk_proximity_penalty_enabled: false
+    risk_proximity_penalty_factor: 1.0
