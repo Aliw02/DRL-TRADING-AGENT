@@ -72,7 +72,7 @@ class TradingEnv(gym.Env):
         done = (self.current_step >= self.max_steps)
         if drawdown > self.max_account_drawdown:
             done = True
-            reward -= 100
+            reward -= 70
             logger.warning(f"CRITICAL: Max drawdown exceeded ({drawdown:.2%}). Terminating episode.")
         self.previous_step_equity = current_equity
         obs = self._next_observation(current_equity)

@@ -37,14 +37,14 @@ environment:
   initial_balance: 10000
   sequence_length: 70
   commission_pct: 0.0005
-  max_account_drawdown: 0.20 # حد الخسارة يبقى كما هو للحماية
+  max_account_drawdown: 0.20
 
-  # --- 💡 الإعدادات الجديدة المدمجة ---
-  # المكافأة اليومية
-  daily_growth_reward_factor: 50.0
-  volatility_penalty_factor: 0.5
+  
+  
+  daily_growth_reward_factor: 40.0
+  volatility_penalty_factor: 0.7
 
-  # الهدف الشهري الجديد
-  monthly_profit_target_pct: 0.50  # 50% target
-  monthly_bonus_reward: 300.0      # مكافأة كبيرة جداً
+  
+  monthly_profit_target_pct: 0.13  # 50% target
+  monthly_bonus_reward: 130.0     
   steps_per_month: 2016

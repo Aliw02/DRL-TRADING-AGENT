@@ -115,13 +115,22 @@ def run_specialist_walk_forward(regime_df: pd.DataFrame, specialist_save_dir: st
         
         if mean_reward > best_reward:
             best_reward, best_model_path = mean_reward, model_path
-            joblib.dump(scaler, specialist_save_dir / f"specialist_scaler_regime_{regime_id}.joblib")
+            # =================== FIX 1 START ===================
+            # Use os.path.join for string-based path concatenation
+            final_scaler_path = os.path.join(specialist_save_dir, f"specialist_scaler_regime_{regime_id}.joblib")
+            joblib.dump(scaler, final_scaler_path)
+            # =================== FIX 1 END =====================
             logger.info(f"🏆 New champion for Specialist {regime_id}! Split {i} is best.")
         del model, eval_env
 
     if best_model_path:
-        final_model_path = specialist_save_dir / "models/best_model.zip"
-        os.makedirs(os.path.dirname(final_model_path), exist_ok=True)
+        # =================== FIX 2 START ===================
+        # Use os.path.join for string-based path concatenation
+        final_model_dir = os.path.join(specialist_save_dir, "models")
+        final_model_path = os.path.join(final_model_dir, "best_model.zip")
+        os.makedirs(final_model_dir, exist_ok=True)
+        # =================== FIX 2 END =====================
+        
         # Use os.rename for moving the file, it's more atomic
         os.rename(best_model_path, final_model_path)
         logger.info(f"✅ Champion model for Specialist {regime_id} has been deployed.")
@@ -151,7 +160,7 @@ def run_specialist_training_pipeline(config_path: str):
             logger.info("\n" + "="*60)
             logger.info(f" COMMENCING ADAPTIVE WF TRAINING FOR SPECIALIST: REGIME {regime_id} ")
             logger.info("="*60)
-
+            
             specialist_save_dir = str(paths.FINAL_MODEL_DIR / f"specialist_regime_{regime_id}")
             if os.path.exists(os.path.join(specialist_save_dir, "models/best_model.zip")):
                 logger.info(f"Champion for Specialist {regime_id} already exists. Skipping.")

@@ -66,7 +66,7 @@ def run_hierarchical_backtest(results_suffix: str = ""):
 
         logger.info("STEP 1: Loading and processing completely unseen test data...")
         transformer = DataTransformer()
-        backtest_df = transformer.load_and_preprocess_data(file_path=str(paths.BACKTEST_M1TF_DATA_FILE), timeframe="15min")
+        backtest_df = transformer.load_and_preprocess_data(file_path=str(paths.BACKTEST_DATA_FILE), timeframe="15min")
         
         # --- حساب وإضافة فلتر EMA إلى البيانات ---
         if use_ema_filter:
@@ -133,8 +133,6 @@ def run_hierarchical_backtest(results_suffix: str = ""):
                 observation = np.expand_dims(observation_raw, axis=0).astype(np.float32)
                 action, _ = model.predict(observation, deterministic=True)
                 action_value = action[0][0]
-
-            # --- إدارة الصفقات (الإغلاق والفتح) ---
             
             if open_position:
                 # (منطق إغلاق الصفقة يبقى كما هو)
@@ -157,7 +155,7 @@ def run_hierarchical_backtest(results_suffix: str = ""):
                     open_position = None
             
             if not open_position:
-                BUY_THRESHOLD, SELL_THRESHOLD = 0.5, -0.5
+                BUY_THRESHOLD, SELL_THRESHOLD = 0.1, -0.0001
                 
                 # --- استخدام EMA للفلترة فقط ---
                 ema_allows_buy = True
