@@ -31,7 +31,6 @@ def run_hierarchical_backtest(results_suffix: str = ""):
         specialist_map = {1: "bullish", -1: "bearish"}
         for state_id, state_name in specialist_map.items():
             specialist_dir = model_dir / f"specialist_{state_name}"
-            # --- CRITICAL CHANGE: Load the champion model, not just any 'best' model ---
             model_path = specialist_dir / "champion_model.zip"
             scaler_path = specialist_dir / "champion_scaler.joblib"
             
@@ -48,8 +47,6 @@ def run_hierarchical_backtest(results_suffix: str = ""):
             logger.error("No champion specialist models were loaded. Cannot proceed.")
             return
 
-        # ... The rest of the backtesting code remains exactly the same ...
-        # It will now use the loaded champion models for its simulation.
         logger.info("STEP 1: Loading and processing unseen test data...")
         transformer = DataTransformer()
         backtest_df = transformer.load_and_preprocess_data(file_path=str(paths.BACKTEST_DATA_FILE), timeframe="15min")
@@ -65,9 +62,15 @@ def run_hierarchical_backtest(results_suffix: str = ""):
         open_position = None
         sequence_length = agent_config.get('environment.sequence_length', 70)
         
+        # --- متغيرات جديدة لتتبع الرصيد الأسبوعي والشهري ---
+        last_weekly_equity = initial_balance
+        last_monthly_equity = initial_balance
+        
         logger.info("STEP 2: Starting simulation loop...")
         for i in range(sequence_length, len(backtest_df)):
             current_bar = backtest_df.iloc[i]
+            previous_bar = backtest_df.iloc[i-1] # للحصول على تاريخ الشمعة السابقة
+            
             active_specialist_id = current_bar['ce_direction']
             active_specialist_info = squad['specialists'].get(active_specialist_id)
             action_value = 0.0
@@ -97,26 +100,56 @@ def run_hierarchical_backtest(results_suffix: str = ""):
                 action_value = action[0][0]
             
             # --- Trade Execution & Equity Update Logic ---
-            # (Your existing logic for handling trades and updating equity fits here)
-            # This part is kept high-level as your original implementation contains the specifics.
             if open_position:
-                if (open_position['type'] == 'BUY' and action_value < 0.1):
-                    # ... closing logic ...
+                unrealized_pnl = (current_bar['close'] - open_position['entry_price']) * open_position['units']
+                equity = open_position['balance_at_entry'] + unrealized_pnl
+
+                if (open_position['type'] == 'BUY' and action_value < 0.1) or \
+                   (open_position['type'] == 'SELL' and action_value > -0.1):
+                    # إغلاق الصفقة
+                    initial_balance += unrealized_pnl # تحديث الرصيد الأساسي
                     open_position = None
                 
             if not open_position:
                 if action_value > 0.5: # Enter BUY
-                    open_position = {'type': 'BUY', 'entry_price': current_bar['open']}
-                # ... other conditions ...
-            
+                    units = (initial_balance * 0.1) / current_bar['close'] # استثمار 10% من الرصيد
+                    open_position = {'type': 'BUY', 'entry_price': current_bar['close'], 'units': units, 'balance_at_entry': initial_balance}
+                elif action_value < -0.5: # Enter SELL
+                    units = (initial_balance * 0.1) / current_bar['close']
+                    open_position = {'type': 'SELL', 'entry_price': current_bar['close'], 'units': -units, 'balance_at_entry': initial_balance}
+
             equity_curve.append(equity)
+
+            # =================================================================
+            # ========== بداية الكود الجديد لطباعة التقارير الدورية ==========
+            # =================================================================
+            current_date = current_bar.name
+            previous_date = previous_bar.name
+
+            # التحقق من نهاية الأسبوع (عندما يكون يوم الأسبوع الحالي أصغر من السابق)
+            if current_date.dayofweek < previous_date.dayofweek:
+                weekly_return = (equity / last_weekly_equity - 1) * 100
+                logger.info(f"--- 📅 Weekly Report [Week of {previous_date.strftime('%Y-%m-%d')}] ---")
+                logger.info(f"      End of Week Equity: ${equity:,.2f} | Weekly P/L: {weekly_return:+.2f}%")
+                last_weekly_equity = equity
+
+            # التحقق من نهاية الشهر (عندما يتغير الشهر)
+            if current_date.month != previous_date.month:
+                monthly_return = (equity / last_monthly_equity - 1) * 100
+                logger.info(f"--- 🗓️ Monthly Report [{previous_date.strftime('%Y-%B')}] ---")
+                logger.info(f"      End of Month Equity: ${equity:,.2f} | Monthly P/L: {monthly_return:+.2f}%")
+                last_monthly_equity = equity
+            # =================================================================
+            # =========== نهاية الكود الجديد لطباعة التقارير الدورية ===========
+            # =================================================================
+
 
         logger.info("Backtest simulation complete. Saving results...")
         trades_df = pd.DataFrame(trades)
         trades_df.to_csv(paths.RESULTS_DIR / f"hierarchical_backtest_trades{results_suffix}.csv", index=False)
         pd.Series(equity_curve).to_csv(paths.RESULTS_DIR / f"hierarchical_backtest_equity{results_suffix}.csv", index=False, header=['equity'])
         
-        if not trades_df.empty:
+        if not trades_df.empty or len(equity_curve) > 1:
             performance = calculate_performance_metrics(pd.Series(equity_curve))
             logger.info("\n--- HIERARCHICAL BACKTEST PERFORMANCE ---")
             logger.info(performance)

@@ -1,5 +1,5 @@
 # envs/trading_env.py
-# VERSION 7: CE-STRATEGIC ALIGNMENT WITH INACTIVITY PENALTY
+# النسخة النهائية مع مكافآت وعقوبات نسبية تتكيف مع حجم الرصيد
 
 import gymnasium as gym
 from gymnasium import spaces
@@ -12,18 +12,17 @@ logger = get_logger(__name__)
 
 class TradingEnv(gym.Env):
     """
-    An advanced trading environment designed to teach an agent to strategically
-    follow the Chandelier Exit (CE) indicator. The reward system is engineered
-    to promote patience, strategic alignment, and robust risk management, while
-    penalizing premature exits, hesitation, and general inactivity.
+    بيئة تداول مع نظام مكافآت ديناميكي يتكيف مع الرصيد الابتدائي،
+    مما يضمن سلوكًا تدريبيًا متسقًا بغض النظر عن حجم رأس المال.
     """
     metadata = {'render.modes': ['human']}
 
     def __init__(self, df: pd.DataFrame):
         super(TradingEnv, self).__init__()
 
-        # --- Data Validation and Initialization ---
-        required_columns = ['close', 'ce_direction', 'bullish_flip', 'bearish_flip', 'dist_to_ce_stop_pct']
+        # --- التحقق من البيانات والتهيئة ---
+        # (هذا الجزء يبقى كما هو)
+        required_columns = ['close', 'ce_direction', 'bullish_flip', 'bearish_flip']
         for col in required_columns:
             if col not in df.columns:
                 raise ValueError(f"DataFrame is missing required column: {col}")
@@ -35,36 +34,44 @@ class TradingEnv(gym.Env):
         self.ce_direction_array = df['ce_direction'].values.astype(np.int8)
         self.bullish_flip_array = df['bullish_flip'].values.astype(np.int8)
         self.bearish_flip_array = df['bearish_flip'].values.astype(np.int8)
-        self.dist_to_ce_stop_pct_array = df['dist_to_ce_stop_pct'].values.astype(np.float32)
-
         self.max_steps = len(df) - 1
 
-        # --- Load Configuration from YAML ---
+        # --- تحميل الإعدادات من ملف YAML ---
         agent_config = Config()
         self.initial_balance = agent_config.get('environment.initial_balance', 10000)
         self.sequence_length = agent_config.get('environment.sequence_length', 70)
         self.commission_pct = agent_config.get('environment.commission_pct', 0.0005)
         self.max_account_drawdown = agent_config.get('environment.max_account_drawdown', 0.20)
 
-        # --- Load Reward Shaping Parameters ---
-        cfg_rewards = agent_config.get('environment.reward_shaping', {})
-        self.patience_reward_factor = cfg_rewards.get('patience_reward_factor', 0.1)
-        self.cowardice_penalty_factor = cfg_rewards.get('cowardice_penalty_factor', 50.0)
-        self.profit_risk_reward_factor = cfg_rewards.get('profit_risk_reward_factor', 2.0)
-        self.opportunity_cost_penalty_factor = cfg_rewards.get('opportunity_cost_penalty_factor', 0.5)
-        self.turnover_penalty_factor = cfg_rewards.get('turnover_penalty_factor', 0.1)
-        self.inactivity_penalty_factor = cfg_rewards.get('inactivity_penalty_factor', 0.01)
-        self.max_idle_steps = cfg_rewards.get('max_idle_steps', 96) # e.g., one full day of 15min bars
+        # =======================================================================
+        # ========== بداية التعديل: تعريف المكافآت والعقوبات كنسبة مئوية ==========
+        # =======================================================================
+        self.profit_multiplier = 2.0
+        self.loss_multiplier = 2.5
+        
+        # المكافأة الإضافية للصفقة الناجحة والمتوافقة تساوي 0.5% من الرصيد الابتدائي
+        self.aligned_trade_bonus = self.initial_balance * 0.005 
 
-        self.risk_proximity_penalty_enabled = cfg_rewards.get('risk_proximity_penalty_enabled', False)
-        self.risk_proximity_penalty_factor = cfg_rewards.get('risk_proximity_penalty_factor', 1.0)
+        # عقوبة الدخول المتأخر تساوي 2% من الرصيد الابتدائي
+        self.late_entry_penalty = self.initial_balance * 0.02
 
-        # --- Action & Observation Spaces ---
+        # عقوبة الخمول تساوي 0.01% من الرصيد الابتدائي
+        self.inactivity_penalty = self.initial_balance * 0.0001
+        # =======================================================================
+        # =========================== نهاية التعديل ============================
+        # =======================================================================
+
+        # --- مساحات العمل والمراقبة ---
+        # (هذا الجزء يبقى كما هو)
         self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
         obs_dim = self.features_array.shape[1] + 2
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(self.sequence_length, obs_dim), dtype=np.float32)
         
         self.reset()
+
+    # ... باقي الدوال (reset, step, _get_reward, etc.) تبقى كما هي بدون تغيير ...
+    # لأن القيم التي تستخدمها الآن (مثل self.late_entry_penalty) أصبحت ديناميكية
+    # ويتم حسابها مرة واحدة عند تهيئة البيئة.
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -75,94 +82,93 @@ class TradingEnv(gym.Env):
         self.entry_price = 0.0
         self.high_water_mark = self.initial_balance
         
-        self.trade_start_step = 0
-        self.in_trade_high_water_mark = self.initial_balance
-        self.in_trade_max_drawdown = 0.0
-        self.opportunity_cost_counter = 0
+        self.steps_since_flip = 0
         self.steps_since_last_trade = 0
+        self.just_opened_trade = False
+        self.entry_ce_direction = 0
+
+        self.last_reported_equity = self.initial_balance
+        self.steps_since_report = 0
 
         return self._next_observation(), {}
 
     def step(self, action):
         target_position_size = float(action[0])
-        previous_position_size = self.position_size
         
-        trade_executed = self._take_action(target_position_size)
+        was_in_trade = (self.position_size != 0)
         
-        if trade_executed:
+        if not was_in_trade and abs(target_position_size) > 0.1:
+            self.entry_ce_direction = self.ce_direction_array[self.current_step]
+
+        self._take_action(target_position_size)
+        is_in_trade = (self.position_size != 0)
+        
+        self.just_opened_trade = (not was_in_trade and is_in_trade)
+        just_closed_trade = (was_in_trade and not is_in_trade)
+
+        self.current_step += 1
+        if self.just_opened_trade or just_closed_trade:
             self.steps_since_last_trade = 0
         else:
             self.steps_since_last_trade += 1
 
-        self.current_step += 1
-        current_equity = self._calculate_equity()
-        is_trade_closed = (previous_position_size != 0 and self.position_size == 0)
-        
-        reward = self._get_reward(previous_position_size, is_trade_closed, current_equity, trade_executed)
+        reward = self._get_reward(just_closed_trade)
 
-        if self.position_size != 0:
-            self.in_trade_high_water_mark = max(self.in_trade_high_water_mark, current_equity)
-            drawdown = (self.in_trade_high_water_mark - current_equity) / (self.in_trade_high_water_mark + 1e-9)
-            self.in_trade_max_drawdown = max(self.in_trade_max_drawdown, drawdown)
-        
+        current_equity = self._calculate_equity()
         self.high_water_mark = max(self.high_water_mark, current_equity)
         global_drawdown = (self.high_water_mark - current_equity) / (self.high_water_mark + 1e-9)
-
+        
         done = (self.current_step >= self.max_steps)
         if global_drawdown > self.max_account_drawdown:
             done = True
-            reward -= 200
+            reward -= (self.initial_balance * 0.2) # عقوبة إفلاس نسبية
             logger.warning(f"CRITICAL: Max account drawdown exceeded ({global_drawdown:.2%}). Terminating.")
 
         obs = self._next_observation()
         info = {'equity': current_equity, 'position_size': self.position_size}
+        
+        self.steps_since_report += 1
+        if self.steps_since_report >= (96 * 5):
+            period_return = (current_equity / self.last_reported_equity - 1) * 100
+            logger.info(
+                f"🧠 Training Report | Step: {self.current_step} | "
+                f"Current Equity: ${current_equity:,.2f} | "
+                f"Period P/L: {period_return:+.2f}%"
+            )
+            self.last_reported_equity = current_equity
+            self.steps_since_report = 0
+
         return obs, reward, done, False, info
 
-    def _get_reward(self, previous_position_size, is_trade_closed, current_equity, trade_executed):
+    def _get_reward(self, just_closed_trade):
         reward = 0.0
-        current_ce_direction = self.ce_direction_array[self.current_step]
-
-        if is_trade_closed:
-            profit = self.balance - self.entry_balance # Use balance at entry for accurate profit calculation
+        
+        if just_closed_trade:
+            profit = self.last_trade_profit
+            trade_was_aligned = (np.sign(self.last_trade_direction) == self.entry_ce_direction)
             
             if profit > 0:
-                risk_adjusted_profit = profit / (self.in_trade_max_drawdown + 0.01)
-                reward += risk_adjusted_profit * self.profit_risk_reward_factor
+                reward += profit * self.profit_multiplier
+                if trade_was_aligned:
+                    reward += self.aligned_trade_bonus 
+            else:
+                reward += profit * self.loss_multiplier
 
-            exited_direction = np.sign(previous_position_size)
-            if profit > 0 and exited_direction == self.ce_direction_array[self.current_step - 1]:
-                 reward -= self.cowardice_penalty_factor
-        
-        elif self.position_size != 0: # In an open trade
-            agent_direction = np.sign(self.position_size)
-            if agent_direction == current_ce_direction:
-                reward += self.patience_reward_factor
+        is_flip_signal = self.bullish_flip_array[self.current_step] == 1 or self.bearish_flip_array[self.current_step] == 1
+        if is_flip_signal: self.steps_since_flip = 0
+        else: self.steps_since_flip += 1
             
-            if self.risk_proximity_penalty_enabled:
-                dist_to_stop = self.dist_to_ce_stop_pct_array[self.current_step]
-                if dist_to_stop < 1.0:
-                    reward -= (1.0 - dist_to_stop) * self.risk_proximity_penalty_factor
+        if self.just_opened_trade and self.steps_since_flip > 2:
+            reward -= self.late_entry_penalty
             
-        else: # Not in a trade
-            is_bullish_flip = self.bullish_flip_array[self.current_step] == 1
-            is_bearish_flip = self.bearish_flip_array[self.current_step] == 1
-            if is_bullish_flip or is_bearish_flip:
-                self.opportunity_cost_counter += 1
-                if self.opportunity_cost_counter > 3:
-                    reward -= self.opportunity_cost_penalty_factor
+        if self.position_size == 0 and self.steps_since_last_trade > 96:
+            reward -= self.inactivity_penalty
             
-            # NEW: General inactivity penalty
-            if self.steps_since_last_trade > self.max_idle_steps:
-                reward -= self.inactivity_penalty_factor
-
-        if trade_executed:
-            reward -= self.turnover_penalty_factor
-
         return float(reward) if np.isfinite(reward) else -1.0
 
     def _take_action(self, target_position_size):
         current_price = self.price_array[self.current_step]
-        trade_executed = False
+        previous_position_size = self.position_size
 
         should_close = (self.position_size > 0 and target_position_size < 0.1) or \
                        (self.position_size < 0 and target_position_size > -0.1)
@@ -171,24 +177,22 @@ class TradingEnv(gym.Env):
             realized_pnl = (current_price - self.entry_price) * self.units_held
             commission_cost = abs(self.units_held * current_price) * self.commission_pct
             self.balance += realized_pnl - commission_cost
+            
+            self.last_trade_profit = realized_pnl - commission_cost
+            self.last_trade_direction = previous_position_size
+            
             self.position_size, self.units_held, self.entry_price = 0.0, 0.0, 0.0
             
-        elif abs(target_position_size) > 1e-6 and not should_close: # Open or increase position
-            if self.position_size == 0.0: # Opening a new trade
+        elif abs(target_position_size) > 1e-6 and not should_close:
+            is_new_trade = (self.position_size == 0.0)
+            if is_new_trade:
                 self.entry_price = current_price
-                self.entry_balance = self.balance # Store balance at entry for PnL
-                self.in_trade_high_water_mark = self.balance
-                self.in_trade_max_drawdown = 0.0
-                self.opportunity_cost_counter = 0
-                trade_executed = True
 
             trade_value = (target_position_size - self.position_size) * self.balance
             commission_cost = abs(trade_value) * self.commission_pct
             self.balance -= commission_cost
             self.units_held += trade_value / current_price
             self.position_size = target_position_size
-        
-        return trade_executed
 
     def _calculate_equity(self):
         if self.position_size == 0.0:

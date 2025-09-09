@@ -3,7 +3,7 @@
 
 training:
   learning_rate: 0.0002
-  buffer_size: 75000
+  buffer_size: 100000
   batch_size: 128
   tau: 0.005
   gamma: 0.99
@@ -31,7 +31,7 @@ specialist_training:
   min_samples_per_regime: 5000
 
 environment:
-  initial_balance: 10000
+  initial_balance: 100
   sequence_length: 70
   commission_pct: 0.0005
   max_account_drawdown: 0.20

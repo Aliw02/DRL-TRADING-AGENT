@@ -1,4 +1,6 @@
-# utils/custom_indicators.py (UPGRADED WITH NUMBA FOR MAXIMUM PERFORMANCE)
+# utils/custom_indicators.py
+# FINAL, ROBUST, AND NUMBA-SAFE VERSION
+
 import pandas as pd
 import numpy as np
 import talib as ta
@@ -7,7 +9,6 @@ from numba import njit
 
 logger = get_logger(__name__)
 
-# --- NEW: Numba JIT-compiled function for high-speed calculation ---
 @njit
 def _calculate_ce_signals_numba(close, long_stop, short_stop):
     """
@@ -19,6 +20,7 @@ def _calculate_ce_signals_numba(close, long_stop, short_stop):
     bullish_flip = np.zeros(n, dtype=np.int8)
     bearish_flip = np.zeros(n, dtype=np.int8)
 
+    # Start from 1 as we look at previous values
     for i in range(1, n):
         # Determine trend direction
         if close[i] > long_stop[i-1]:
@@ -37,15 +39,11 @@ def _calculate_ce_signals_numba(close, long_stop, short_stop):
             
     return ce_direction, bullish_flip, bearish_flip
 
-
-# utils/custom_indicators.py
-
-# ... (نفس الكود للدالة _calculate_ce_signals_numba)
-
 def _add_chandelier_exit_signals(df: pd.DataFrame, period=7, multiplier=4.0):
     """
     Calculates Chandelier Exit using a high-performance Numba backend
-    AND adds a strategic "distance to stop" feature.
+    AND adds a strategic "distance to stop" feature. This version is hardened
+    against NaN values to ensure robust calculation.
     """
     logger.info("Engineering Chandelier Exit signals and strategic distance feature...")
 
@@ -54,23 +52,34 @@ def _add_chandelier_exit_signals(df: pd.DataFrame, period=7, multiplier=4.0):
     long_stop = df['high'].rolling(period).max() - atr * multiplier
     short_stop = df['low'].rolling(period).min() + atr * multiplier
 
+    # --- CRITICAL FIX START ---
+    # Sanitize inputs before passing to Numba. Rolling operations create NaNs at the
+    # start of the series. Numba is not guaranteed to handle them gracefully.
+    # We backfill to propagate the first valid value backward, then fill any
+    # remaining NaNs (at the absolute start) with 0. This is a robust way
+    # to ensure the arrays passed to the JIT function are clean.
+    long_stop_sanitized = long_stop.bfill().fillna(0)
+    short_stop_sanitized = short_stop.bfill().fillna(0)
+    close_sanitized = df['close'].fillna(0)
+    # --- CRITICAL FIX END ---
+
     ce_direction, bullish_flip, bearish_flip = _calculate_ce_signals_numba(
-        df['close'].values, 
-        long_stop.values, 
-        short_stop.values
+        close_sanitized.values, 
+        long_stop_sanitized.values, 
+        short_stop_sanitized.values
     )
     
     df['ce_direction'] = ce_direction
     df['bullish_flip'] = bullish_flip
     df['bearish_flip'] = bearish_flip
     
+    # Recalculate distance_to_stop using original data to maintain accuracy
     distance_to_stop = np.where(
         df['ce_direction'] == 1,
         (df['close'] - long_stop) / (df['close'] + 1e-9),
         (short_stop - df['close']) / (df['close'] + 1e-9)
     )
     df['dist_to_ce_stop_pct'] = distance_to_stop * 100
-    # ------------------------------------
     
     return df
 
@@ -165,6 +174,8 @@ def calculate_all_indicators(df: pd.DataFrame):
     df = _add_candlestick_features(df)
     df = _add_time_features(df)
     df = _add_advanced_statistical_features(df) 
+    
+    # This must be one of the last indicators calculated, as it depends on others like ATR.
     df = _add_chandelier_exit_signals(df) 
 
     logger.info("Cleaning up final dataframe...")
