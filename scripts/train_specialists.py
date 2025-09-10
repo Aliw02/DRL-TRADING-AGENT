@@ -1,5 +1,5 @@
 # scripts/train_specialists.py
-# FINAL VERSION: CE-ALIGNED SPECIALIST FORGING WITH WALK-FORWARD VALIDATION
+# FINAL VERSION: CE-ALIGNED SPECIALIST FORGING WITH DYNAMIC CONFIGURATION
 
 import pandas as pd
 import joblib
@@ -55,11 +55,18 @@ def run_specialist_walk_forward(specialist_df: pd.DataFrame, specialist_save_dir
     """
     logger = get_logger(__name__)
     
+    # --- Check if a champion model already exists to skip re-training ---
+    final_model_path = os.path.join(specialist_save_dir, "champion_model.zip")
+    final_scaler_path = os.path.join(specialist_save_dir, "champion_scaler.joblib")
+    if os.path.exists(final_model_path) and os.path.exists(final_scaler_path):
+        logger.info(f"✅ Champion model for {state_name} advisor already exists. Skipping training.")
+        return
+
     wf_config = config.get('training.walk_forward')
     n_splits = wf_config['n_splits']
     min_train_size = wf_config['min_train_size']
     test_size = wf_config['test_size']
-    holdout_size = test_size # Use one test segment as the final unseen holdout set
+    holdout_size = test_size
 
     total_required_data = min_train_size + (n_splits * test_size)
     if len(specialist_df) < total_required_data:
@@ -129,8 +136,6 @@ def run_specialist_walk_forward(specialist_df: pd.DataFrame, specialist_save_dir
 
     # --- Final Model Deployment ---
     if best_model_path and best_scaler_path:
-        final_model_path = os.path.join(specialist_save_dir, "champion_model.zip")
-        final_scaler_path = os.path.join(specialist_save_dir, "champion_scaler.joblib")
         shutil.copy(best_model_path, final_model_path)
         shutil.copy(best_scaler_path, final_scaler_path)
         logger.info(f"✅ Champion model for {state_name} deployed to: {final_model_path}")
@@ -146,9 +151,7 @@ def run_specialist_training_pipeline(config_path: str):
     logger.info("="*80)
 
     try:
-        agent_config = Config(config_path=config_path)
         full_df = pd.read_parquet(paths.PROCESSED_DATA_FILE) 
-        
         ce_state_datasets = create_ce_state_datasets(full_df)
 
         for state_id, state_df in ce_state_datasets.items():
@@ -160,6 +163,28 @@ def run_specialist_training_pipeline(config_path: str):
             specialist_save_dir = str(paths.FINAL_MODEL_DIR / f"specialist_{state_name.lower()}")
             os.makedirs(specialist_save_dir, exist_ok=True)
             
+            # Create a fresh config instance for each specialist to avoid carrying over modifications
+            agent_config = Config(config_path=config_path)
+
+            # =======================================================================
+            # ========== بداية التعديل: تطبيق إعدادات خاصة للخبير البيعي ==========
+            # =======================================================================
+            if state_name == "BEARISH":
+                logger.warning("Applying special emergency configuration for BEARISH advisor due to limited data.")
+                
+                # Manually override the configuration values for this specific run
+                agent_config.config['training']['walk_forward']['n_splits'] = 3
+                agent_config.config['training']['walk_forward']['min_train_size'] = 2000
+                agent_config.config['training']['walk_forward']['test_size'] = 500
+                agent_config.config['training']['walk_forward']['timesteps_per_split'] = 30000
+                agent_config.config['training']['learning_rate'] = 0.0001 # Slower learning rate for stability
+                
+                logger.info(f"Overridden Walk-Forward Config for BEARISH: {agent_config.get('training.walk_forward')}")
+                logger.info(f"Overridden Learning Rate for BEARISH: {agent_config.get('training.learning_rate')}")
+            # =======================================================================
+            # ========== نهاية التعديل ==========
+            # =======================================================================
+
             # Run the full walk-forward pipeline for this specialist
             run_specialist_walk_forward(state_df, specialist_save_dir, agent_config, state_name)
 
@@ -171,6 +196,92 @@ def run_specialist_training_pipeline(config_path: str):
         logger.error(f"A critical failure occurred during specialist training: {e}", exc_info=True)
         raise
 
+def run_fine_tuning_on_specialists(config: Config):
+    """
+    Fine-tunes the existing champion models on the most recent data slice,
+    using adaptive settings based on data availability for each specialist.
+    """
+    logger = get_logger(__name__)
+    logger.info("="*80)
+    logger.info(" 🚀 INITIATING ADAPTIVE FINE-TUNING PROTOCOL FOR CHAMPION SPECIALISTS 🚀 ")
+    logger.info("="*80)
+    
+    try:
+        full_df = pd.read_parquet(paths.PROCESSED_DATA_FILE)
+        ce_state_datasets = create_ce_state_datasets(full_df)
+        ft_config = config.get('training.fine_tuning')
+        
+        for state_id, state_df in ce_state_datasets.items():
+            state_name = "BULLISH" if state_id == 1 else "BEARISH"
+            logger.info(f"\n--- Fine-tuning {state_name} Specialist ---")
+            
+            specialist_dir = paths.FINAL_MODEL_DIR / f"specialist_{state_name.lower()}"
+            champion_model_path = specialist_dir / "champion_model.zip"
+            
+            if not champion_model_path.exists():
+                logger.warning(f"No champion model found for {state_name}. Skipping fine-tuning.")
+                continue
+
+            # =======================================================================
+            # ========== بداية التعديل: إعدادات صقل ديناميكية لكل خبير ==========
+            # =======================================================================
+            if state_name == "BEARISH":
+                # Special settings for the Bearish model with limited data
+                logger.warning("Applying adaptive fine-tuning settings for BEARISH specialist.")
+                
+                # Use a smaller percentage of the most recent data
+                recent_data_rows = int(len(state_df) * 0.3) # Use last 30% of available data
+                
+                # Use more conservative learning parameters
+                fine_tuning_timesteps = 15000 # Fewer steps to avoid overfitting
+                fine_tuning_lr = 5e-6       # Very low learning rate for gentle adjustments
+
+                logger.info(f"BEARISH specialist will use {recent_data_rows} samples, {fine_tuning_timesteps} timesteps, and LR={fine_tuning_lr}.")
+
+            else: # Bullish model with plenty of data
+                # Use the standard robust settings from the config file
+                recent_data_rows = int(ft_config.get('recent_data_years', 1.5) * 252 * 96)
+                fine_tuning_timesteps = ft_config.get('total_timesteps')
+                fine_tuning_lr = ft_config.get('learning_rate')
+            # =======================================================================
+            # ========== نهاية التعديل ==========
+            # =======================================================================
+            
+            if len(state_df) < recent_data_rows:
+                logger.warning(f"Not enough recent data for {state_name} ({len(state_df)} available). Using all available data.")
+                recent_df = state_df
+            else:
+                recent_df = state_df.tail(recent_data_rows).copy()
+
+            logger.info(f"Using last {len(recent_df)} data points for fine-tuning.")
+
+            final_scaler = RobustScaler()
+            feature_cols = [c for c in recent_df.columns if c not in ['open', 'high', 'low', 'close', 'time', 'timestamp']]
+            recent_df.loc[:, feature_cols] = final_scaler.fit_transform(recent_df[feature_cols])
+
+            fine_tune_env = make_vec_env(lambda: TradingEnv(recent_df), n_envs=1)
+            model = SAC.load(champion_model_path, env=fine_tune_env, device=DEVICE)
+            
+            model.learning_rate = fine_tuning_lr
+            
+            logger.info(f"Engaging fine-tuning for {fine_tuning_timesteps} timesteps with learning rate {model.learning_rate}...")
+            model.learn(
+                total_timesteps=fine_tuning_timesteps,
+                reset_num_timesteps=False,
+                progress_bar=False
+            )
+            
+            model.save(champion_model_path)
+            joblib.dump(final_scaler, specialist_dir / "champion_scaler.joblib")
+            
+            logger.info(f"✅ Fine-tuning complete for {state_name}. Model and scaler updated.")
+            del model, fine_tune_env
+            gc.collect()
+
+    except Exception as e:
+        logger.error(f"A critical failure occurred during fine-tuning: {e}", exc_info=True)
+        raise
+
+
 if __name__ == "__main__":
-    # Example of how to run this script
     run_specialist_training_pipeline(config_path='config/config_sac.yaml')

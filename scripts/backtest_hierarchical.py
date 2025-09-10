@@ -83,7 +83,7 @@ def run_hierarchical_backtest(results_suffix: str = ""):
 
         logger.info("STEP 1: Loading and processing unseen test data...")
         transformer = DataTransformer()
-        backtest_df = transformer.load_and_preprocess_data(file_path=str(paths.BACKTEST_DATA_FILE), timeframe="15min")
+        backtest_df = transformer.load_and_preprocess_data(file_path=str(paths.BACKTEST_M1TF_DATA_FILE), timeframe="15min")
         
         logger.info("Calculating external EMA filters...")
         backtest_df['ema_fast'] = ta.EMA(backtest_df['close'], timeperiod=50)

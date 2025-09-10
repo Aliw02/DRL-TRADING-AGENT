@@ -84,7 +84,7 @@ def train_one_segment(train_df: pd.DataFrame, eval_df: pd.DataFrame, save_path_p
     model.learn(
         total_timesteps=total_timesteps,
         callback=eval_callback,
-        progress_bar=True # Provide visual feedback on training progress
+        progress_bar=False # Provide visual feedback on training progress
     )
     
     logger.info(f"✅ Segment training complete.")
