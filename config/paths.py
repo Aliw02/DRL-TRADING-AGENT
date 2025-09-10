@@ -9,7 +9,7 @@ ROOT_DIR = Path(__file__).parent.parent.resolve()
 # The root directory for data and results on your Google Drive
 DRIVE_DIR = Path("/content/drive/MyDrive").resolve()
 
-USE_GOOGLE_COLAB = True
+USE_GOOGLE_COLAB = False
 if USE_GOOGLE_COLAB:
     DRIVE_DIR = Path("/content/drive/MyDrive").resolve()
     ROOT_DIR = DRIVE_DIR

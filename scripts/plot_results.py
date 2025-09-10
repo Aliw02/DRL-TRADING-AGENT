@@ -48,7 +48,7 @@ class HierarchicalPlotter:
             # --- التحسين الرئيسي: إعادة الفهرس ليصبح عموداً ---
             # We need a corresponding price data file to get the timestamps.
             # Assuming the backtest was run on the full enriched data.
-            price_data_df = pd.read_parquet(paths.FINAL_ENRICHED_DATA_FILE).reset_index()
+            price_data_df = pd.read_parquet(paths.PROCESSED_DATA_FILE).reset_index()
             
             # Align the equity curve with the timestamps from the price data
             if 'timestamp' in price_data_df.columns and len(self.equity_df) <= len(price_data_df):
