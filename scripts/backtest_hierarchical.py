@@ -1,6 +1,5 @@
 # scripts/backtest_hierarchical.py
 # CE-ALIGNED HIERARCHICAL BACKTESTING SIMULATOR (CHAMPIONSHIP EDITION) - V7 (Trade Logging Enabled)
-
 import pandas as pd
 import joblib
 import os
@@ -33,14 +32,12 @@ def calculate_commission(lot_size: float, hour: int) -> float:
     num_blocks = abs(lot_size) / 0.01
     return num_blocks * cost_per_001_lot
 
-def run_hierarchical_backtest(results_suffix: str = ""):
+
+def run_hierarchical_backtest(backtest_df: pd.DataFrame = None, results_suffix: str = ""):
     setup_logging()
     logger = get_logger(__name__)
     logger.info(f"🚀 INITIATING FINAL BACKTEST WITH TRADE LOGGING...")
 
-    # =================================================================
-    # =============== ⚙️ إعدادات الفلاتر وقواعد التداول ===============
-    # =================================================================
     agent_config = Config()
     
     use_ema_filter = True
@@ -50,7 +47,6 @@ def run_hierarchical_backtest(results_suffix: str = ""):
     
     atr_multiplier = 4.0
     
-    # --- Dynamic Lot Sizing Settings ---
     base_lot_size = 0.01
     lot_step_per_profit = 0.01
     profit_threshold_for_step = 100.0
@@ -61,7 +57,6 @@ def run_hierarchical_backtest(results_suffix: str = ""):
 
     logger.info(f"Filters: EMA Cross = {use_ema_filter}, Time = {use_time_filter} ({trading_start_hour}:00-{trading_end_hour}:00)")
     logger.info(f"Lot Sizing: Base Lot = {base_lot_size}, Step = {lot_step_per_profit} per ${profit_threshold_for_step} profit.")
-    # =================================================================
     
     try:
         squad = {'specialists': {}}
@@ -80,11 +75,16 @@ def run_hierarchical_backtest(results_suffix: str = ""):
         if not squad['specialists']:
             logger.error("No champion specialist models were loaded. Cannot proceed.")
             return
-
-        logger.info("STEP 1: Loading and processing unseen test data...")
-        transformer = DataTransformer()
-        backtest_df = transformer.load_and_preprocess_data(file_path=str(paths.BACKTEST_M1TF_DATA_FILE), timeframe="15min")
         
+        # --- MODIFICATION START: Use provided DataFrame if available ---
+        if backtest_df is None:
+            logger.info("STEP 1: Loading and processing unseen test data...")
+            transformer = DataTransformer()
+            backtest_df = transformer.load_and_preprocess_data(file_path=str(paths.BACKTEST_DATA_FILE), timeframe="15min")
+        else:
+            logger.info("STEP 1: Using pre-loaded DataFrame for backtest (Stress Test Mode).")
+        # --- MODIFICATION END ---
+
         logger.info("Calculating external EMA filters...")
         backtest_df['ema_fast'] = ta.EMA(backtest_df['close'], timeperiod=50)
         backtest_df['ema_slow'] = ta.EMA(backtest_df['close'], timeperiod=200)
@@ -94,7 +94,7 @@ def run_hierarchical_backtest(results_suffix: str = ""):
         initial_balance = starting_balance
         equity = initial_balance
         equity_curve = [initial_balance]
-        trades = [] # قائمة لتخزين سجلات الصفقات
+        trades = []
         open_position = None
         sequence_length = agent_config.get('environment.sequence_length', 70)
         
@@ -130,7 +130,6 @@ def run_hierarchical_backtest(results_suffix: str = ""):
                     
                     initial_balance += gross_pnl - closing_commission
                     
-                    # --- تسجيل بيانات الصفقة ---
                     trade_record = {
                         'entry_time': open_position['entry_time'],
                         'exit_time': current_bar.name,
@@ -200,17 +199,18 @@ def run_hierarchical_backtest(results_suffix: str = ""):
 
             equity_curve.append(equity)
             
-            current_date, previous_date = current_bar.name, previous_bar.name
-            if current_date.dayofweek < previous_date.dayofweek:
-                weekly_return = (equity / last_weekly_equity - 1) * 100 if last_weekly_equity > 0 else 0
-                logger.info(f"--- 📅 Weekly Report [Week of {previous_date.strftime('%Y-%m-%d')}] ---")
-                logger.info(f"      End of Week Equity: ${equity:,.2f} | Weekly P/L: {weekly_return:+.2f}%")
-                last_weekly_equity = equity
-            if current_date.month != previous_date.month:
-                monthly_return = (equity / last_monthly_equity - 1) * 100 if last_monthly_equity > 0 else 0
-                logger.info(f"--- 🗓️ Monthly Report [{previous_date.strftime('%Y-%B')}] ---")
-                logger.info(f"      End of Month Equity: ${equity:,.2f} | Monthly P/L: {monthly_return:+.2f}%")
-                last_monthly_equity = equity
+            if i < len(backtest_df) -1:
+                current_date, previous_date = current_bar.name, previous_bar.name
+                if current_date.dayofweek < previous_date.dayofweek:
+                    weekly_return = (equity / last_weekly_equity - 1) * 100 if last_weekly_equity > 0 else 0
+                    logger.info(f"--- 📅 Weekly Report [Week of {previous_date.strftime('%Y-%m-%d')}] ---")
+                    logger.info(f"      End of Week Equity: ${equity:,.2f} | Weekly P/L: {weekly_return:+.2f}%")
+                    last_weekly_equity = equity
+                if current_date.month != previous_date.month:
+                    monthly_return = (equity / last_monthly_equity - 1) * 100 if last_monthly_equity > 0 else 0
+                    logger.info(f"--- 🗓️ Monthly Report [{previous_date.strftime('%Y-%B')}] ---")
+                    logger.info(f"      End of Month Equity: ${equity:,.2f} | Monthly P/L: {monthly_return:+.2f}%")
+                    last_monthly_equity = equity
 
         logger.info("Backtest simulation complete. Saving results...")
         trades_df = pd.DataFrame(trades)
