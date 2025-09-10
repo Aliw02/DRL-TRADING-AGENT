@@ -2,6 +2,7 @@
 from pathlib import Path
 import os
 
+
 # --- Define project directories ---
 # The root directory for the project code
 
@@ -9,7 +10,15 @@ ROOT_DIR = Path(__file__).parent.parent.resolve()
 # The root directory for data and results on your Google Drive
 DRIVE_DIR = Path("/content/drive/MyDrive").resolve()
 
-USE_GOOGLE_COLAB = False
+def get_ipython():
+    try:
+        from IPython import get_ipython as gip
+        return gip()
+    except ImportError:
+        return None
+
+USE_GOOGLE_COLAB = True if "google.colab" in str(get_ipython()) else False
+
 if USE_GOOGLE_COLAB:
     DRIVE_DIR = Path("/content/drive/MyDrive").resolve()
     ROOT_DIR = DRIVE_DIR

@@ -1,5 +1,5 @@
 # envs/trading_env.py
-# النسخة النهائية مع مكافأة مضخمة وغير متكافئة لتحفيز السعي نحو الربح
+# النسخة النهائية مع هندسة المكافآت المركبة لتحقيق النمو الهرمي
 
 import gymnasium as gym
 from gymnasium import spaces
@@ -11,16 +11,12 @@ from config.init import Config
 logger = get_logger(__name__)
 
 class TradingEnv(gym.Env):
-    """
-    بيئة تداول مع نظام مكافآت مضخم وغير متكافئ لتعليم النموذج
-    السعي بنشاط لتحقيق الأرباح بدلاً من تجنب الخسارة فقط.
-    """
     metadata = {'render.modes': ['human']}
 
     def __init__(self, df: pd.DataFrame):
         super(TradingEnv, self).__init__()
 
-        # ... (كل أجزاء التهيئة الأخرى تبقى كما هي) ...
+        # --- التهيئة تبقى كما هي ---
         required_columns = ['close', 'ce_direction', 'bullish_flip', 'bearish_flip']
         for col in required_columns:
             if col not in df.columns:
@@ -42,16 +38,16 @@ class TradingEnv(gym.Env):
         self.max_account_drawdown = agent_config.get('environment.max_account_drawdown', 0.20)
 
         # =======================================================================
-        # ========== بداية التعديل: تعريف المكافآت المضخمة ==========
+        # ========== بداية التعديل: تعريف معاملات المكافآت المركبة ==========
         # =======================================================================
-        self.profit_amplification_factor = 5.0 # تضخيم الأرباح 5 مرات
-        self.loss_amplification_factor = 2.0   # تضخيم الخسائر مرتين فقط
-
-        # بقية المكافآت والعقوبات تبقى كما هي
-        self.milestone_bonus = 30.0
-        self.milestone_percentage = 0.05
-        self.late_entry_penalty_pct = 2.0
-        self.inactivity_penalty_pct = 0.2
+        self.patience_reward_factor = 0.1      # مكافأة الصبر على الربح
+        self.profit_taking_bonus = 10.0        # مكافأة جني الأرباح
+        self.new_high_bonus = 20.0             # مكافأة تحقيق قمة جديدة
+        self.loss_penalty_factor = 1.5         # مضاعف للخسائر لجعلها مؤلمة
+        
+        # العقوبات السلوكية
+        self.late_entry_penalty = self.initial_balance * 0.02
+        self.inactivity_penalty = self.initial_balance * 0.002 # زدنا عقوبة الخمول
         # =======================================================================
         
         self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
@@ -61,7 +57,6 @@ class TradingEnv(gym.Env):
         self.reset()
 
     def reset(self, seed=None, options=None):
-        # ... (دالة reset تبقى كما هي) ...
         super().reset(seed=seed)
         self.current_step = self.sequence_length
         self.balance = self.initial_balance
@@ -70,10 +65,6 @@ class TradingEnv(gym.Env):
         self.entry_price = 0.0
         
         self.high_water_mark = self.initial_balance
-        self.milestone_base = self.initial_balance
-        self.next_milestone_target = self.milestone_base * (1 + self.milestone_percentage)
-        
-        self.previous_equity = self.initial_balance
         
         self.steps_since_flip = 0
         self.steps_since_last_trade = 0
@@ -86,7 +77,6 @@ class TradingEnv(gym.Env):
         return self._next_observation(), {}
 
     def step(self, action):
-        # ... (معظم دالة step تبقى كما هي) ...
         target_position_size = float(action[0])
         
         was_in_trade = (self.position_size != 0)
@@ -110,9 +100,11 @@ class TradingEnv(gym.Env):
         
         reward = self._get_reward(just_closed_trade, current_equity)
 
-        self.previous_equity = current_equity
+        # تحديث القمة الجديدة يتم هنا
+        if current_equity > self.high_water_mark:
+             reward += self.new_high_bonus
+             self.high_water_mark = current_equity
 
-        self.high_water_mark = max(self.high_water_mark, current_equity)
         global_drawdown = (self.high_water_mark - current_equity) / (self.high_water_mark + 1e-9)
         
         done = (self.current_step >= self.max_steps)
@@ -138,45 +130,41 @@ class TradingEnv(gym.Env):
         return obs, reward, done, False, info
 
     def _get_reward(self, just_closed_trade, current_equity):
-        """
-        دالة مكافأة أساسها هو التغير اللحظي في الرصيد مع تضخيم غير متكافئ للأرباح.
-        """
-        equity_change = current_equity - self.previous_equity
+        reward = 0.0
         
-        # --- 1. المكافأة/العقوبة الأساسية المضخمة ---
-        if equity_change > 0:
-            reward = equity_change * self.profit_amplification_factor
-        else:
-            reward = equity_change * self.loss_amplification_factor
+        # --- الطبقة الأولى: مكافأة الصبر على الربح ---
+        if self.position_size != 0:
+            unrealized_pnl = (current_equity - self.balance)
+            if unrealized_pnl > 0:
+                reward += self.patience_reward_factor
 
-        # --- 2. المكافأة الهرمية (إضافية) ---
-        if current_equity > self.next_milestone_target:
-            reward += self.milestone_bonus
-            self.milestone_base = current_equity
-            self.next_milestone_target = self.milestone_base * (1 + self.milestone_percentage)
-            logger.info(f"🎉 MILESTONE REACHED! New Equity High: ${current_equity:,.2f}. Bonus: {self.milestone_bonus}. Next target: ${self.next_milestone_target:,.2f}")
-
-        # --- 3. حافز إضافي للصفقات المتوافقة (عند الإغلاق فقط) ---
+        # --- الطبقة الثانية: مكافأة/عقوبة عند إغلاق الصفقة ---
         if just_closed_trade:
+            profit = self.last_trade_profit
             trade_was_aligned = (np.sign(self.last_trade_direction) == self.entry_ce_direction)
-            if self.last_trade_profit > 0 and trade_was_aligned:
-                reward += (self.last_trade_profit / self.initial_balance) * 10
+            
+            if profit > 0:
+                reward += self.profit_taking_bonus
+                if trade_was_aligned:
+                    reward += self.profit_taking_bonus # مكافأة إضافية للالتزام
+            else:
+                reward += profit * self.loss_penalty_factor # الخسارة بالسالب أصلاً
 
-        # --- 4. العقوبات السلوكية (للحفاظ على الانضباط) ---
+        # --- الطبقة الثالثة: العقوبات السلوكية ---
         is_flip_signal = self.bullish_flip_array[self.current_step] == 1 or self.bearish_flip_array[self.current_step] == 1
         if is_flip_signal: self.steps_since_flip = 0
         else: self.steps_since_flip += 1
             
         if self.just_opened_trade and self.steps_since_flip > 2:
-            reward -= self.late_entry_penalty_pct
+            reward -= (self.late_entry_penalty / self.initial_balance) * 100
 
         if self.position_size == 0 and self.steps_since_last_trade > 96 * 5:
-            reward -= self.inactivity_penalty_pct
+            reward -= (self.inactivity_penalty / self.initial_balance) * 100
             
         return float(reward) if np.isfinite(reward) else -1.0
 
 
-    # ... (باقي دوال الملف تبقى كما هي بدون تغيير) ...
+    # ... (باقي دوال الملف تبقى كما هي) ...
     def _take_action(self, target_position_size):
         # ...
         current_price = self.price_array[self.current_step]
